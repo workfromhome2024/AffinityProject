@@ -29,29 +29,33 @@ class SmolVLARealDataTests(APITestCase):
             self.fail("Could not retrieve sample from Hugging Face")
 
         sample = samples[0]
-        # Get the first camera key from the dataset metadata
-        camera_key = dataset.meta.camera_keys[0]
-        # Image is a torch tensor (C, H, W) float32 [0,1], convert to PIL
-        pil_image = to_pil_image(sample[camera_key])
 
-        # 2. Convert PIL Image to Django Uploaded File
-        image_io = io.BytesIO()
-        pil_image.save(image_io, format='JPEG')
-        image_io.seek(0)
+        # 2. Convert dataset camera images to uploaded files keyed by the model's camera names.
+        # The model expects camera1/camera2/camera3; the dataset may have different names
+        # (e.g. top/wrist). Map dataset cameras to model cameras in order, reusing the
+        # last available image for any extra model cameras.
+        from django.apps import apps
+        policy = apps.get_app_config('smolvla').policy
+        model_camera_names = [k.split(".")[-1] for k in policy.config.image_features]
+        dataset_camera_keys = dataset.meta.camera_keys
 
-        uploaded_image = SimpleUploadedFile(
-            "hf_sample.jpg",
-            image_io.read(),
-            content_type="image/jpeg"
-        )
+        data = {}
+        for i, cam_name in enumerate(model_camera_names):
+            # Use the corresponding dataset camera, or the last one if fewer dataset cameras
+            ds_key = dataset_camera_keys[min(i, len(dataset_camera_keys) - 1)]
+            pil_image = to_pil_image(sample[ds_key])
+            image_io = io.BytesIO()
+            pil_image.save(image_io, format='JPEG')
+            image_io.seek(0)
+            data[cam_name] = SimpleUploadedFile(
+                f"{cam_name}.jpg",
+                image_io.read(),
+                content_type="image/jpeg"
+            )
 
         # 3. Use the task instruction if available in dataset, else use generic
         instruction = sample.get("task", "stack the blocks")
-
-        data = {
-            'instruction': instruction,
-            'image': uploaded_image
-        }
+        data['instruction'] = instruction
 
         # 4. Request
         response = self.client.post(url, data, format='multipart')
@@ -60,6 +64,6 @@ class SmolVLARealDataTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIn('action_chunk', response.data)
         self.assertEqual(len(response.data['action_chunk']), 50)
-        
+
         print(f"Test Success! Instruction: '{instruction}'")
         print(f"First action step: {response.data['action_chunk'][0]}")
