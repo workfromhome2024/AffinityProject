@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Django 6.0.2 web application ("affinity") running on Python 3.14. Currently a fresh project scaffold with no custom apps. `djangorestframework` is installed but not yet added to `INSTALLED_APPS`.
+Django 6.0.2 web application ("affinity") running on Python 3.14. Serves a SmolVLA robotics vision-language-action model as a REST API using Django REST Framework.
+
+Key dependencies: `djangorestframework`, `lerobot` (Hugging Face LeRobot), `torch`, `Pillow`, `datasets`.
 
 ## Commands
 
@@ -29,19 +31,25 @@ python manage.py test <app_name>.tests.<TestClass>.<test_method>
 
 # Create a new app
 python manage.py startapp <app_name>
-
-# Create superuser
-python manage.py createsuperuser
 ```
 
 ## Architecture
 
 - **Django project package**: `affinity/` — settings, root URL conf, WSGI/ASGI entry points
 - **Settings**: `affinity/settings.py` — single settings file, SQLite database, DEBUG=True
-- **URL routing**: `affinity/urls.py` — root URL conf; only `/admin/` is configured
-- **Database**: SQLite3 (`db.sqlite3`), no migrations applied yet
+- **Database**: SQLite3 (`db.sqlite3`)
 
-When adding new apps, remember to:
-1. Add the app to `INSTALLED_APPS` in `affinity/settings.py`
-2. Include the app's URLs in `affinity/urls.py` using `include()`
-3. If using DRF, add `'rest_framework'` to `INSTALLED_APPS`
+### smolvla app
+
+The `smolvla` app wraps the SmolVLA robotics policy model behind a DRF API endpoint.
+
+- **Model loading** (`smolvla/apps.py`): `SmolVLAPolicy` from `lerobot` is loaded once at startup in `AppConfig.ready()` onto CPU. Only loads in the reloader child process (`RUN_MAIN=true`) to avoid double-loading in dev.
+- **Inference endpoint** (`smolvla/views.py`): `POST /smolvla/api/predict/` — accepts a multipart form with an `image` file and optional `instruction` text. Returns a JSON action chunk from the model.
+- **Test data helper** (`smolvla/tests.py`): `download_and_sample_vla_data()` fetches sample data from `lerobot/svla_so100_stacking` on Hugging Face for testing.
+
+**Note**: `smolvla` and `rest_framework` are not yet added to `INSTALLED_APPS` in settings.py — they need to be added for the app to function.
+
+### URL routing
+
+- `/admin/` — Django admin
+- `/smolvla/` — includes `smolvla.urls` (configured in root `affinity/urls.py`)
