@@ -10,8 +10,8 @@ class PredictActionView(APIView):
     parser_classes = [MultiPartParser]
 
     def post(self, request):
-        # 1. Get the pre-loaded policy
-        policy = apps.get_app_config('smolvla').policy
+        # 1. Get the policy (lazy-loaded on first access)
+        policy = apps.get_app_config('smolvla').get_policy()
         
         # 2. Extract inputs
         instruction = request.data.get('instruction', 'pick up the object')
@@ -67,3 +67,25 @@ class PredictActionView(APIView):
             "instruction": instruction,
             "action_chunk": actions[0].tolist()  # Remove batch dim, returns list of action steps
         })
+
+
+class RetargetView(APIView):
+    parser_classes = [MultiPartParser]
+
+    def post(self, request):
+        instruction = request.data.get('instruction')
+        video = request.FILES.get('video')
+
+        if not instruction and not video:
+            return Response(
+                {"error": "At least one of 'instruction' (text) or 'video' (file) is required."},
+                status=400,
+            )
+
+        return Response(
+            {
+                "received_instruction": instruction is not None,
+                "received_video": video is not None,
+            },
+            status=200,
+        )

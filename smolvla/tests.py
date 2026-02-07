@@ -1,4 +1,5 @@
 import io
+import os
 import random
 from django.urls import reverse
 from rest_framework import status
@@ -35,7 +36,7 @@ class SmolVLARealDataTests(APITestCase):
         # (e.g. top/wrist). Map dataset cameras to model cameras in order, reusing the
         # last available image for any extra model cameras.
         from django.apps import apps
-        policy = apps.get_app_config('smolvla').policy
+        policy = apps.get_app_config('smolvla').get_policy()
         model_camera_names = [k.split(".")[-1] for k in policy.config.image_features]
         dataset_camera_keys = dataset.meta.camera_keys
 
@@ -67,3 +68,43 @@ class SmolVLARealDataTests(APITestCase):
 
         print(f"Test Success! Instruction: '{instruction}'")
         print(f"First action step: {response.data['action_chunk'][0]}")
+
+
+class RetargetViewTests(APITestCase):
+    VIDEO_PATH = os.path.join(os.path.dirname(__file__), 'testdata', 'opening-drawer.webm')
+
+    def test_retarget_with_video_and_instruction(self):
+        """Test retarget endpoint with both video and instruction."""
+        url = reverse('retarget-action')
+        with open(self.VIDEO_PATH, 'rb') as f:
+            video = SimpleUploadedFile('opening-drawer.webm', f.read(), content_type='video/webm')
+        data = {'instruction': 'open the drawer', 'video': video}
+        response = self.client.post(url, data, format='multipart')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['received_instruction'])
+        self.assertTrue(response.data['received_video'])
+
+    def test_retarget_with_video_only(self):
+        """Test retarget endpoint with only a video."""
+        url = reverse('retarget-action')
+        with open(self.VIDEO_PATH, 'rb') as f:
+            video = SimpleUploadedFile('opening-drawer.webm', f.read(), content_type='video/webm')
+        response = self.client.post(url, {'video': video}, format='multipart')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(response.data['received_instruction'])
+        self.assertTrue(response.data['received_video'])
+
+    def test_retarget_with_instruction_only(self):
+        """Test retarget endpoint with only an instruction."""
+        url = reverse('retarget-action')
+        response = self.client.post(url, {'instruction': 'open the drawer'}, format='multipart')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['received_instruction'])
+        self.assertFalse(response.data['received_video'])
+
+    def test_retarget_with_no_data(self):
+        """Test retarget endpoint rejects empty requests."""
+        url = reverse('retarget-action')
+        response = self.client.post(url, {}, format='multipart')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('error', response.data)
