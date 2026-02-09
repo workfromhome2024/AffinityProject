@@ -9,6 +9,10 @@ export const Colors = {
   textSecondary: '#6B7280',
   border: '#D1D5DB',
   disabled: '#9CA3AF',
+  bubbleUser: '#4F46E5',
+  bubbleAssistant: '#E5E7EB',
+  bubbleUserText: '#FFFFFF',
+  bubbleAssistantText: '#111827',
 };
 
 export const Spacing = {

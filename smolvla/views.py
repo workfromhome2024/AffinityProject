@@ -1,6 +1,8 @@
+import base64
+
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework.parsers import MultiPartParser
+from rest_framework.parsers import MultiPartParser, JSONParser
 from django.apps import apps
 import torch
 from PIL import Image
@@ -70,22 +72,56 @@ class PredictActionView(APIView):
 
 
 class RetargetView(APIView):
-    parser_classes = [MultiPartParser]
+    parser_classes = [JSONParser, MultiPartParser]
 
     def post(self, request):
-        instruction = request.data.get('instruction')
-        video = request.FILES.get('video')
-
-        if not instruction and not video:
+        # Accept base64-encoded video in JSON body
+        video_base64 = request.data.get('video_base64')
+        if video_base64:
+            video_bytes = base64.b64decode(video_base64)
+            video_name = request.data.get('video_name', 'upload.mp4')
             return Response(
-                {"error": "At least one of 'instruction' (text) or 'video' (file) is required."},
-                status=400,
+                {
+                    "received_video": True,
+                    "video_name": video_name,
+                    "video_size": len(video_bytes),
+                },
+                status=200,
+            )
+
+        # Fallback: accept multipart file upload
+        video = request.FILES.get('video')
+        if video:
+            return Response(
+                {
+                    "received_video": True,
+                    "video_name": video.name,
+                    "video_size": video.size,
+                },
+                status=200,
             )
 
         return Response(
-            {
-                "received_instruction": instruction is not None,
-                "received_video": video is not None,
-            },
+            {"error": "A 'video_base64' field (JSON) or 'video' file (multipart) is required."},
+            status=400,
+        )
+
+
+class RoboChatView(APIView):
+    parser_classes = [JSONParser]
+
+    def post(self, request):
+        message = request.data.get('message')
+        if not message:
+            return Response(
+                {"error": "A 'message' field is required."},
+                status=400,
+            )
+
+        # Echo reply for now — replace with actual model inference later
+        reply = f"You said: {message}"
+
+        return Response(
+            {"reply": reply},
             status=200,
         )

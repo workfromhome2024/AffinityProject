@@ -1,4 +1,6 @@
+import base64
 import io
+import json
 import os
 import random
 from django.urls import reverse
@@ -73,38 +75,61 @@ class SmolVLARealDataTests(APITestCase):
 class RetargetViewTests(APITestCase):
     VIDEO_PATH = os.path.join(os.path.dirname(__file__), 'testdata', 'opening-drawer.webm')
 
-    def test_retarget_with_video_and_instruction(self):
-        """Test retarget endpoint with both video and instruction."""
+    def test_retarget_with_video_base64(self):
+        """Test retarget endpoint accepts base64-encoded video in JSON."""
         url = reverse('retarget-action')
         with open(self.VIDEO_PATH, 'rb') as f:
-            video = SimpleUploadedFile('opening-drawer.webm', f.read(), content_type='video/webm')
-        data = {'instruction': 'open the drawer', 'video': video}
-        response = self.client.post(url, data, format='multipart')
+            video_bytes = f.read()
+        video_b64 = base64.b64encode(video_bytes).decode('utf-8')
+        response = self.client.post(
+            url,
+            {'video_base64': video_b64, 'video_name': 'opening-drawer.webm'},
+            format='json',
+        )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertTrue(response.data['received_instruction'])
         self.assertTrue(response.data['received_video'])
+        self.assertEqual(response.data['video_name'], 'opening-drawer.webm')
+        self.assertEqual(response.data['video_size'], len(video_bytes))
 
-    def test_retarget_with_video_only(self):
-        """Test retarget endpoint with only a video."""
+    def test_retarget_with_video_multipart(self):
+        """Test retarget endpoint still accepts multipart file upload."""
         url = reverse('retarget-action')
         with open(self.VIDEO_PATH, 'rb') as f:
             video = SimpleUploadedFile('opening-drawer.webm', f.read(), content_type='video/webm')
         response = self.client.post(url, {'video': video}, format='multipart')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertFalse(response.data['received_instruction'])
         self.assertTrue(response.data['received_video'])
+        self.assertEqual(response.data['video_name'], 'opening-drawer.webm')
+        self.assertGreater(response.data['video_size'], 0)
 
-    def test_retarget_with_instruction_only(self):
-        """Test retarget endpoint with only an instruction."""
+    def test_retarget_without_video(self):
+        """Test retarget endpoint rejects requests without a video."""
         url = reverse('retarget-action')
-        response = self.client.post(url, {'instruction': 'open the drawer'}, format='multipart')
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertTrue(response.data['received_instruction'])
-        self.assertFalse(response.data['received_video'])
+        response = self.client.post(url, {}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('error', response.data)
 
-    def test_retarget_with_no_data(self):
-        """Test retarget endpoint rejects empty requests."""
+    def test_retarget_empty_multipart_rejected(self):
+        """Test retarget endpoint rejects empty multipart requests."""
         url = reverse('retarget-action')
         response = self.client.post(url, {}, format='multipart')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('error', response.data)
+
+
+class RoboChatViewTests(APITestCase):
+
+    def test_send_message_returns_reply(self):
+        """Test robochat endpoint returns a reply for a valid message."""
+        url = reverse('robo-chat')
+        response = self.client.post(url, {'message': 'Hello robot'}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('reply', response.data)
+        self.assertIn('Hello robot', response.data['reply'])
+
+    def test_empty_message_rejected(self):
+        """Test robochat endpoint rejects requests without a message."""
+        url = reverse('robo-chat')
+        response = self.client.post(url, {}, format='json')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn('error', response.data)

@@ -7,11 +7,23 @@ export interface MediaAsset {
 }
 
 export interface SubmissionPayload {
-  instruction: string;
   media: MediaAsset;
 }
 
-export interface PredictionResponse {
-  instruction: string;
-  action_chunk: number[][];
+export interface RetargetResponse {
+  received_video: boolean;
+  video_name: string;
+  video_size: number;
+}
+
+export interface RoboChatResponse {
+  reply: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  text?: string;
+  video?: MediaAsset;
+  timestamp: number;
 }

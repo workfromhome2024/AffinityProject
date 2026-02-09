@@ -1,21 +1,46 @@
-import { PredictionResponse, SubmissionPayload } from '../types';
+import * as FileSystem from 'expo-file-system';
+import { SubmissionPayload, RetargetResponse, RoboChatResponse } from '../types';
 
-export async function submitPrediction(
+const API_BASE_URL = 'http://10.0.2.2:8000';
+
+export async function submitRetarget(
   payload: SubmissionPayload,
-): Promise<PredictionResponse> {
-  await new Promise((resolve) => setTimeout(resolve, 1500));
+): Promise<RetargetResponse> {
+  const { media } = payload;
 
-  // ~20% random failure rate
-  if (Math.random() < 0.2) {
-    throw new Error('Prediction failed. The model could not process this input.');
+  const fileName = media.uri.split('/').pop() ?? 'upload.mp4';
+  const url = `${API_BASE_URL}/smolvla/api/retarget/`;
+
+  const uploadResult = await FileSystem.uploadAsync(url, media.uri, {
+    httpMethod: 'POST',
+    uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+    fieldName: 'video',
+    parameters: { video_name: fileName },
+  });
+
+  const data: RetargetResponse = JSON.parse(uploadResult.body);
+
+  if (uploadResult.status !== 200) {
+    throw new Error((data as any).error ?? `Request failed with status ${uploadResult.status}`);
   }
 
-  return {
-    instruction: payload.instruction,
-    action_chunk: [
-      [0.12, -0.34, 0.56, -0.78, 0.91, -0.23],
-      [0.45, -0.67, 0.89, -0.12, 0.34, -0.56],
-      [0.78, -0.91, 0.23, -0.45, 0.67, -0.89],
-    ],
-  };
+  return data;
+}
+
+export async function sendTextMessage(message: string): Promise<RoboChatResponse> {
+  const url = `${API_BASE_URL}/smolvla/api/robochat/`;
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message }),
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.error ?? `Request failed with status ${response.status}`);
+  }
+
+  return data;
 }
