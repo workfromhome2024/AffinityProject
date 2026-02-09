@@ -1,65 +1,78 @@
-import { useState } from 'react';
-import { StyleSheet, ScrollView, KeyboardAvoidingView, Platform } from 'react-native';
+import { useState, useRef } from 'react';
+import { StyleSheet, FlatList, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import InstructionInput from '../components/InstructionInput';
-import MediaPicker from '../components/MediaPicker';
-import MediaPreview from '../components/MediaPreview';
-import SubmitButton from '../components/SubmitButton';
-import StatusMessage from '../components/StatusMessage';
-import { submitPrediction } from '../services/api';
-import { Colors, Spacing } from '../constants/theme';
-import { MediaAsset } from '../types';
-
-type Status = 'idle' | 'loading' | 'success' | 'error';
+import ChatBubble from '../components/ChatBubble';
+import ChatInputBar from '../components/ChatInputBar';
+import { submitRetarget, sendTextMessage } from '../services/api';
+import { Colors } from '../constants/theme';
+import { MediaAsset, ChatMessage } from '../types';
 
 export default function MainScreen() {
-  const [instruction, setInstruction] = useState('');
-  const [media, setMedia] = useState<MediaAsset | null>(null);
-  const [status, setStatus] = useState<Status>('idle');
-  const [resultMessage, setResultMessage] = useState('');
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [sending, setSending] = useState(false);
+  const flatListRef = useRef<FlatList<ChatMessage>>(null);
 
-  const handleSubmit = async () => {
-    if (!media) return;
-    setStatus('loading');
-    setResultMessage('');
+  const addMessage = (msg: Omit<ChatMessage, 'id' | 'timestamp'>): ChatMessage => {
+    const full: ChatMessage = {
+      ...msg,
+      id: Date.now().toString() + Math.random().toString(36).slice(2),
+      timestamp: Date.now(),
+    };
+    setMessages((prev) => [...prev, full]);
+    return full;
+  };
+
+  const handleSend = async (text: string) => {
+    addMessage({ role: 'user', text });
+    setSending(true);
     try {
-      const response = await submitPrediction({ instruction, media });
-      setStatus('success');
-      setResultMessage(
-        `Prediction received: ${response.action_chunk.length} action steps`,
-      );
+      const response = await sendTextMessage(text);
+      addMessage({ role: 'assistant', text: response.reply });
     } catch (err) {
-      setStatus('error');
-      setResultMessage(
-        err instanceof Error ? err.message : 'An unexpected error occurred.',
-      );
+      const msg = err instanceof Error ? err.message : 'Failed to send message.';
+      addMessage({ role: 'assistant', text: `Error: ${msg}` });
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handleAttachVideo = async (asset: MediaAsset) => {
+    addMessage({ role: 'user', video: asset });
+    setSending(true);
+    try {
+      const response = await submitRetarget({ media: asset });
+      addMessage({
+        role: 'assistant',
+        text: `Video uploaded: ${response.video_name} (${response.video_size} bytes)`,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Upload failed.';
+      addMessage({ role: 'assistant', text: `Error: ${msg}` });
+    } finally {
+      setSending(false);
     }
   };
 
   return (
     <SafeAreaView style={styles.safe} edges={['bottom']}>
-      <KeyboardAvoidingView
-        style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
-        <ScrollView
+      <View style={styles.flex}>
+        <FlatList
+          ref={flatListRef}
+          data={messages}
+          keyExtractor={(item) => item.id}
+          renderItem={({ item }) => <ChatBubble message={item} />}
           style={styles.flex}
-          contentContainerStyle={styles.content}
+          contentContainerStyle={styles.chatContent}
+          onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
           keyboardShouldPersistTaps="handled"
-        >
-          <InstructionInput value={instruction} onChangeText={setInstruction} />
-          <MediaPicker onMediaSelected={setMedia} />
-          {media && <MediaPreview media={media} onRemove={() => setMedia(null)} />}
-          <SubmitButton
-            onPress={handleSubmit}
-            loading={status === 'loading'}
-            disabled={!media}
-          />
-          {(status === 'success' || status === 'error') && (
-            <StatusMessage status={status} message={resultMessage} />
-          )}
-        </ScrollView>
-      </KeyboardAvoidingView>
+        />
+      </View>
+
+      <ChatInputBar
+        onSend={handleSend}
+        onAttachVideo={handleAttachVideo}
+        disabled={sending}
+      />
     </SafeAreaView>
   );
 }
@@ -72,8 +85,9 @@ const styles = StyleSheet.create({
   flex: {
     flex: 1,
   },
-  content: {
-    padding: Spacing.lg,
-    gap: Spacing.lg,
+  chatContent: {
+    paddingVertical: 8,
+    flexGrow: 1,
+    justifyContent: 'flex-end',
   },
 });

@@ -21,7 +21,9 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "softwareKeyboardLayoutMode": "resize",
+      "usesCleartextTraffic": true
     },
     "web": {
       "favicon": "./assets/favicon.png",
@@ -35,7 +37,8 @@
           "photosPermission": "Allow Affinity to access your photos for model predictions.",
           "cameraPermission": "Allow Affinity to use the camera for model predictions."
         }
-      ]
+      ],
+      "expo-video"
     ]
   }
 }
