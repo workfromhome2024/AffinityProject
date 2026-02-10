@@ -3,21 +3,21 @@ import base64
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, JSONParser
-from django.apps import apps
-import torch
-from PIL import Image
-import io
 
 class PredictActionView(APIView):
     parser_classes = [MultiPartParser]
 
     def post(self, request):
+        import torch
+        from PIL import Image
+        from django.apps import apps
+        from torchvision.transforms.functional import to_tensor, resize
+
         # 1. Get the policy (lazy-loaded on first access)
         policy = apps.get_app_config('smolvla').get_policy()
-        
+
         # 2. Extract inputs
         instruction = request.data.get('instruction', 'pick up the object')
-        from torchvision.transforms.functional import to_tensor, resize
 
         # 3. Pre-process images for each camera
         # The model expects one image per camera (e.g. camera1, camera2, camera3).
