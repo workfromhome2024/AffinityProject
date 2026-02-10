@@ -1,0 +1,35 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  django:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - shared_media:/app/shared_media
+    depends_on:
+      - redis
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - SHARED_MEDIA_ROOT=/app/shared_media
+      - ALLOWED_HOSTS=${SERVER_IP:-localhost},localhost,127.0.0.1,10.0.2.2
+
+  anyteleop:
+    build:
+      context: ./anyteleop
+      dockerfile: Dockerfile
+    volumes:
+      - shared_media:/app/shared_media
+    depends_on:
+      - redis
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - SHARED_MEDIA_ROOT=/app/shared_media
+
+volumes:
+  shared_media:

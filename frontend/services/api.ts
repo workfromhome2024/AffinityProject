@@ -1,7 +1,7 @@
 import * as FileSystem from 'expo-file-system';
 import { SubmissionPayload, RetargetResponse, RoboChatResponse } from '../types';
 
-const API_BASE_URL = 'http://10.0.2.2:8000';
+const API_BASE_URL = 'http://167.99.163.59:8000';
 
 export async function submitRetarget(
   payload: SubmissionPayload,

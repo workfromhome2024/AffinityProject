@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -25,7 +26,7 @@ SECRET_KEY = 'django-insecure-fzooho)8emlmwqaxtyf9ehvsxm#q50^^vg_$trt6#u-j5@h95(
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['10.0.2.2', 'localhost', '127.0.0.1']
+ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '10.0.2.2,localhost,127.0.0.1').split(',')
 
 
 # Application definition
@@ -119,6 +120,14 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = 'static/'
+
+# Media files (uploads)
+MEDIA_URL = 'media/'
+MEDIA_ROOT = os.environ.get('SHARED_MEDIA_ROOT', str(BASE_DIR.parent / 'shared_media'))
+
+# Celery
+CELERY_BROKER_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
+CELERY_RESULT_BACKEND = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
 
 # CORS — allow all origins during development
 CORS_ALLOW_ALL_ORIGINS = True

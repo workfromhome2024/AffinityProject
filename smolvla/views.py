@@ -75,16 +75,23 @@ class RetargetView(APIView):
     parser_classes = [JSONParser, MultiPartParser]
 
     def post(self, request):
+        from .models import Video
+        from django.core.files.base import ContentFile
+
         # Accept base64-encoded video in JSON body
         video_base64 = request.data.get('video_base64')
         if video_base64:
             video_bytes = base64.b64decode(video_base64)
             video_name = request.data.get('video_name', 'upload.mp4')
+            video_obj = Video(original_name=video_name, size=len(video_bytes))
+            video_obj.file.save(video_name, ContentFile(video_bytes), save=True)
             return Response(
                 {
                     "received_video": True,
+                    "video_id": str(video_obj.id),
                     "video_name": video_name,
                     "video_size": len(video_bytes),
+                    "video_path": video_obj.file.name,
                 },
                 status=200,
             )
@@ -92,11 +99,15 @@ class RetargetView(APIView):
         # Fallback: accept multipart file upload
         video = request.FILES.get('video')
         if video:
+            video_obj = Video(original_name=video.name, size=video.size)
+            video_obj.file.save(video.name, video, save=True)
             return Response(
                 {
                     "received_video": True,
+                    "video_id": str(video_obj.id),
                     "video_name": video.name,
                     "video_size": video.size,
+                    "video_path": video_obj.file.name,
                 },
                 status=200,
             )
