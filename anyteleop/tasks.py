@@ -63,7 +63,7 @@ def process_video(video_path):
 
                 # Stage 2: Dex-retargeting
                 # The config handles the mapping from 21 points to robot joints
-                robot_qpos = retargeter.retarget(landmarks_array, non_target_qpos=default_non_target_qpos)
+                robot_qpos = retargeter.retarget(landmarks_array, fixed_qpos=default_non_target_qpos)
                 all_robot_qpos.append(robot_qpos.tolist())
             else:
                 # --- IMPROVEMENT 3: Sequence Stability ---
