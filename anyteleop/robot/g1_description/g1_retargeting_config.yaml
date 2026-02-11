@@ -5,14 +5,22 @@ retargeting:
   low_pass_alpha: 0.2
   scaling_factor: 1.0
 
-  # Only independent (non-mimic) left hand joints — mimic joints are excluded
+  # All independent (non-mimic) joints — must include both hands since URDF has both
   target_joint_names:
+    # Left hand
     - "L_thumb_proximal_yaw_joint"
     - "L_thumb_proximal_pitch_joint"
     - "L_index_proximal_joint"
     - "L_middle_proximal_joint"
     - "L_ring_proximal_joint"
     - "L_pinky_proximal_joint"
+    # Right hand (required because URDF has right hand mimic joints too)
+    - "R_thumb_proximal_yaw_joint"
+    - "R_thumb_proximal_pitch_joint"
+    - "R_index_proximal_joint"
+    - "R_middle_proximal_joint"
+    - "R_ring_proximal_joint"
+    - "R_pinky_proximal_joint"
 
   # Vector retargeting: defines pairs of (origin, task) links on the robot.
   # Each pair forms a direction vector that is matched to the corresponding
