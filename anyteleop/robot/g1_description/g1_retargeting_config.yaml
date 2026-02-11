@@ -26,11 +26,8 @@ retargeting:
     - "L_pinky_intermediate" # Pinky tip
 
   # MediaPipe landmark indices for human hand vectors
-  # Each sub-list is [origin_index, task_index]
+  # Shape must be (2, N): row 0 = origin indices, row 1 = task indices
   # 0=Wrist, 4=Thumb tip, 8=Index tip, 12=Middle tip, 16=Ring tip, 20=Pinky tip
   target_link_human_indices:
-    - [0, 4]    # Wrist -> Thumb tip
-    - [0, 8]    # Wrist -> Index tip
-    - [0, 12]   # Wrist -> Middle tip
-    - [0, 16]   # Wrist -> Ring tip
-    - [0, 20]   # Wrist -> Pinky tip
+    - [0, 0, 0, 0, 0]      # Origins: all Wrist
+    - [4, 8, 12, 16, 20]   # Tasks: Thumb, Index, Middle, Ring, Pinky tips

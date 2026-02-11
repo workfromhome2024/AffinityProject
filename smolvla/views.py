@@ -1,3 +1,4 @@
+import os
 import base64
 
 from rest_framework.views import APIView
@@ -76,7 +77,9 @@ class RetargetView(APIView):
 
     def post(self, request):
         from .models import Video
+        from django.conf import settings
         from django.core.files.base import ContentFile
+        from celery import current_app
 
         # Accept base64-encoded video in JSON body
         video_base64 = request.data.get('video_base64')
@@ -85,37 +88,50 @@ class RetargetView(APIView):
             video_name = request.data.get('video_name', 'upload.mp4')
             video_obj = Video(original_name=video_name, size=len(video_bytes))
             video_obj.file.save(video_name, ContentFile(video_bytes), save=True)
-            return Response(
-                {
-                    "received_video": True,
-                    "video_id": str(video_obj.id),
-                    "video_name": video_name,
-                    "video_size": len(video_bytes),
-                    "video_path": video_obj.file.name,
-                },
-                status=200,
-            )
-
-        # Fallback: accept multipart file upload
-        video = request.FILES.get('video')
-        if video:
+        elif request.FILES.get('video'):
+            video = request.FILES['video']
             video_obj = Video(original_name=video.name, size=video.size)
             video_obj.file.save(video.name, video, save=True)
+        else:
             return Response(
-                {
-                    "received_video": True,
-                    "video_id": str(video_obj.id),
-                    "video_name": video.name,
-                    "video_size": video.size,
-                    "video_path": video_obj.file.name,
-                },
-                status=200,
+                {"error": "A 'video_base64' field (JSON) or 'video' file (multipart) is required."},
+                status=400,
             )
 
-        return Response(
-            {"error": "A 'video_base64' field (JSON) or 'video' file (multipart) is required."},
-            status=400,
+        # Build absolute path that the anyteleop worker can access via shared volume
+        video_path = os.path.join(settings.MEDIA_ROOT, video_obj.file.name)
+
+        # Dispatch Celery task to anyteleop worker
+        task = current_app.send_task(
+            'anyteleop.process_video',
+            args=[video_path],
+            queue='anyteleop',
         )
+
+        return Response(
+            {
+                "video_id": str(video_obj.id),
+                "task_id": task.id,
+                "status": "processing",
+            },
+            status=202,
+        )
+
+
+class TaskResultView(APIView):
+    def get(self, request, task_id):
+        from celery.result import AsyncResult
+
+        result = AsyncResult(task_id)
+
+        if result.state == 'PENDING':
+            return Response({"status": "processing"})
+        elif result.state == 'FAILURE':
+            return Response({"status": "failed", "error": str(result.result)}, status=500)
+        elif result.state == 'SUCCESS':
+            return Response({"status": "completed", **result.result})
+        else:
+            return Response({"status": result.state})
 
 
 class RoboChatView(APIView):
