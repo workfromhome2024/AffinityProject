@@ -20,10 +20,9 @@ retargeting_config = RetargetingConfig.load_from_file(CONFIG_PATH)
 retargeter = retargeting_config.build()
 
 # Non-target joints (legs, waist, arms) need default positions (zeros)
-num_total_joints = retargeter.optimizer.robot.dof
-num_target_joints = len(retargeting_config.target_joint_names)
-num_non_target = num_total_joints - num_target_joints
-default_non_target_qpos = np.zeros(num_non_target)
+# Use the optimizer's own index mapping to get the correct count
+num_fixed = len(retargeter.optimizer.idx_pin2fixed)
+default_non_target_qpos = np.zeros(num_fixed)
 
 mp_hands = mp.solutions.hands
 hands_detector = mp_hands.Hands(
