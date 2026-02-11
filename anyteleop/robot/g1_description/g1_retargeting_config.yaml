@@ -1,60 +1,36 @@
-retargeting_type: vector
-layout: mediapipe
-urdf_path: "g1_29dof_rev_1_0_with_inspire_hand_DFQ.urdf"
+retargeting:
+  type: vector
+  urdf_path: "g1_29dof_rev_1_0_with_inspire_hand_DFQ.urdf"
+  wrist_link_name: "L_hand_base_link"
+  low_pass_alpha: 0.2
+  scaling_factor: 1.0
 
-# Unitree G1 with Inspire DFQ 5-finger hand (left hand)
-# 6 independently controlled finger joints; intermediate/distal are mimic joints
-#
-# Independent joints:
-#   L_thumb_proximal_yaw_joint, L_thumb_proximal_pitch_joint
-#   L_index_proximal_joint, L_middle_proximal_joint
-#   L_ring_proximal_joint, L_pinky_proximal_joint
-#
-# Mimic joints (auto-follow, do NOT include in target_joint_names):
-#   L_thumb_intermediate_joint  (mimics thumb_proximal_pitch x1.6)
-#   L_thumb_distal_joint        (mimics thumb_proximal_pitch x2.4)
-#   L_index_intermediate_joint  (mimics index_proximal x1)
-#   L_middle_intermediate_joint (mimics middle_proximal x1)
-#   L_ring_intermediate_joint   (mimics ring_proximal x1)
-#   L_pinky_intermediate_joint  (mimics pinky_proximal x1)
+  # Vector retargeting: defines pairs of (origin, task) links on the robot.
+  # Each pair forms a direction vector that is matched to the corresponding
+  # human hand direction vector defined by target_link_human_indices.
 
-# Fingertip links — last link in each finger kinematic chain
-finger_tip_links:
-  - "L_thumb_distal"
-  - "L_index_intermediate"
-  - "L_middle_intermediate"
-  - "L_ring_intermediate"
-  - "L_pinky_intermediate"
+  # Origin links (start of each vector on the robot)
+  target_origin_link_names:
+    - "L_hand_base_link"    # Thumb vector origin
+    - "L_hand_base_link"    # Index vector origin
+    - "L_hand_base_link"    # Middle vector origin
+    - "L_hand_base_link"    # Ring vector origin
+    - "L_hand_base_link"    # Pinky vector origin
 
-# Human-to-Robot vector mapping (MediaPipe landmark indices)
-# 0=Wrist, 4=Thumb tip, 8=Index tip, 12=Middle tip, 16=Ring tip, 20=Pinky tip
-chain_connections:
-  - [0, 4]    # Wrist -> Thumb tip
-  - [0, 8]    # Wrist -> Index tip
-  - [0, 12]   # Wrist -> Middle tip
-  - [0, 16]   # Wrist -> Ring tip
-  - [0, 20]   # Wrist -> Pinky tip
+  # Task links (end of each vector on the robot — fingertips)
+  target_task_link_names:
+    - "L_thumb_distal"       # Thumb tip
+    - "L_index_intermediate" # Index tip
+    - "L_middle_intermediate"# Middle tip
+    - "L_ring_intermediate"  # Ring tip
+    - "L_pinky_intermediate" # Pinky tip
 
-# Active joints to control (only independently actuated joints)
-target_joint_names:
-  # Arm & Wrist (7 DOF)
-  - "left_shoulder_pitch_joint"
-  - "left_shoulder_roll_joint"
-  - "left_shoulder_yaw_joint"
-  - "left_elbow_joint"
-  - "left_wrist_roll_joint"
-  - "left_wrist_pitch_joint"
-  - "left_wrist_yaw_joint"
-  # Hand — Thumb (2 independent joints)
-  - "L_thumb_proximal_yaw_joint"
-  - "L_thumb_proximal_pitch_joint"
-  # Hand — Index (1 independent joint)
-  - "L_index_proximal_joint"
-  # Hand — Middle (1 independent joint)
-  - "L_middle_proximal_joint"
-  # Hand — Ring (1 independent joint)
-  - "L_ring_proximal_joint"
-  # Hand — Pinky (1 independent joint)
-  - "L_pinky_proximal_joint"
-
-scaling: 1.0
+  # MediaPipe landmark indices for human hand vectors
+  # Each sub-list is [origin_index, task_index]
+  # 0=Wrist, 4=Thumb tip, 8=Index tip, 12=Middle tip, 16=Ring tip, 20=Pinky tip
+  target_link_human_indices:
+    - [0, 4]    # Wrist -> Thumb tip
+    - [0, 8]    # Wrist -> Index tip
+    - [0, 12]   # Wrist -> Middle tip
+    - [0, 16]   # Wrist -> Ring tip
+    - [0, 20]   # Wrist -> Pinky tip
