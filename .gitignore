@@ -2,7 +2,17 @@ db.sqlite3
 __pycache__/
 *.pyc
 migrations/
+.claude/
 
 # Frontend
-frontend/node_modules/
-frontend/.expo/
+frontend/
+
+# Shared media uploads
+shared_media/
+
+# Environment variables (contains server IP)
+.env
+
+# URDF/mesh files (downloaded directly on server)
+*.urdf
+*.STL

@@ -1,0 +1,60 @@
+retargeting_type: vector
+layout: mediapipe
+urdf_path: "g1_29dof_rev_1_0_with_inspire_hand_DFQ.urdf"
+
+# Unitree G1 with Inspire DFQ 5-finger hand (left hand)
+# 6 independently controlled finger joints; intermediate/distal are mimic joints
+#
+# Independent joints:
+#   L_thumb_proximal_yaw_joint, L_thumb_proximal_pitch_joint
+#   L_index_proximal_joint, L_middle_proximal_joint
+#   L_ring_proximal_joint, L_pinky_proximal_joint
+#
+# Mimic joints (auto-follow, do NOT include in target_joint_names):
+#   L_thumb_intermediate_joint  (mimics thumb_proximal_pitch x1.6)
+#   L_thumb_distal_joint        (mimics thumb_proximal_pitch x2.4)
+#   L_index_intermediate_joint  (mimics index_proximal x1)
+#   L_middle_intermediate_joint (mimics middle_proximal x1)
+#   L_ring_intermediate_joint   (mimics ring_proximal x1)
+#   L_pinky_intermediate_joint  (mimics pinky_proximal x1)
+
+# Fingertip links — last link in each finger kinematic chain
+finger_tip_links:
+  - "L_thumb_distal"
+  - "L_index_intermediate"
+  - "L_middle_intermediate"
+  - "L_ring_intermediate"
+  - "L_pinky_intermediate"
+
+# Human-to-Robot vector mapping (MediaPipe landmark indices)
+# 0=Wrist, 4=Thumb tip, 8=Index tip, 12=Middle tip, 16=Ring tip, 20=Pinky tip
+chain_connections:
+  - [0, 4]    # Wrist -> Thumb tip
+  - [0, 8]    # Wrist -> Index tip
+  - [0, 12]   # Wrist -> Middle tip
+  - [0, 16]   # Wrist -> Ring tip
+  - [0, 20]   # Wrist -> Pinky tip
+
+# Active joints to control (only independently actuated joints)
+target_joint_names:
+  # Arm & Wrist (7 DOF)
+  - "left_shoulder_pitch_joint"
+  - "left_shoulder_roll_joint"
+  - "left_shoulder_yaw_joint"
+  - "left_elbow_joint"
+  - "left_wrist_roll_joint"
+  - "left_wrist_pitch_joint"
+  - "left_wrist_yaw_joint"
+  # Hand — Thumb (2 independent joints)
+  - "L_thumb_proximal_yaw_joint"
+  - "L_thumb_proximal_pitch_joint"
+  # Hand — Index (1 independent joint)
+  - "L_index_proximal_joint"
+  # Hand — Middle (1 independent joint)
+  - "L_middle_proximal_joint"
+  # Hand — Ring (1 independent joint)
+  - "L_ring_proximal_joint"
+  # Hand — Pinky (1 independent joint)
+  - "L_pinky_proximal_joint"
+
+scaling: 1.0
