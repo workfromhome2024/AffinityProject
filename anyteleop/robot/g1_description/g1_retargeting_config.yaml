@@ -5,6 +5,15 @@ retargeting:
   low_pass_alpha: 0.2
   scaling_factor: 1.0
 
+  # Only independent (non-mimic) left hand joints — mimic joints are excluded
+  target_joint_names:
+    - "L_thumb_proximal_yaw_joint"
+    - "L_thumb_proximal_pitch_joint"
+    - "L_index_proximal_joint"
+    - "L_middle_proximal_joint"
+    - "L_ring_proximal_joint"
+    - "L_pinky_proximal_joint"
+
   # Vector retargeting: defines pairs of (origin, task) links on the robot.
   # Each pair forms a direction vector that is matched to the corresponding
   # human hand direction vector defined by target_link_human_indices.
