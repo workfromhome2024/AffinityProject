@@ -16,7 +16,14 @@ URDF_DIR = "/app/robot/g1_description"
 CONFIG_PATH = "/app/robot/g1_description/g1_retargeting_config.yaml"
 
 RetargetingConfig.set_default_urdf_dir(URDF_DIR)
-retargeter = RetargetingConfig.load_from_file(CONFIG_PATH).build()
+retargeting_config = RetargetingConfig.load_from_file(CONFIG_PATH)
+retargeter = retargeting_config.build()
+
+# Non-target joints (legs, waist, arms) need default positions (zeros)
+num_total_joints = retargeter.optimizer.robot.dof
+num_target_joints = len(retargeting_config.target_joint_names)
+num_non_target = num_total_joints - num_target_joints
+default_non_target_qpos = np.zeros(num_non_target)
 
 mp_hands = mp.solutions.hands
 hands_detector = mp_hands.Hands(
@@ -56,7 +63,7 @@ def process_video(video_path):
 
                 # Stage 2: Dex-retargeting
                 # The config handles the mapping from 21 points to robot joints
-                robot_qpos = retargeter.retarget(landmarks_array)
+                robot_qpos = retargeter.retarget(landmarks_array, non_target_qpos=default_non_target_qpos)
                 all_robot_qpos.append(robot_qpos.tolist())
             else:
                 # --- IMPROVEMENT 3: Sequence Stability ---
