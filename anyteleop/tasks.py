@@ -2,9 +2,8 @@ import os
 import cv2
 import numpy as np
 import mediapipe as mp
-from dex_retargeting.seq_retarget import SeqRetargeting
+from dex_retargeting.retargeting_config import RetargetingConfig
 from celery import Celery
-import yaml
 
 app = Celery('anyteleop')
 app.config_from_object({
@@ -12,15 +11,12 @@ app.config_from_object({
     'result_backend': os.environ.get('REDIS_URL', 'redis://localhost:6379/0'),
 })
 
-# --- IMPROVEMENT 1: Use Config File instead of URDF ---
-# This YAML should point to your URDF and define the hand-to-robot mapping.
+# Initialize Dex-Retargeting for Unitree G1 with Inspire DFQ hand
+URDF_DIR = "/app/robot/g1_description"
 CONFIG_PATH = "/app/robot/g1_description/g1_retargeting_config.yaml"
 
-# Initialize Retargeter using the library-standard method
-# Note: Ensure dex-retargeting is installed (pip install dex-retargeting)
-retargeter = SeqRetargeting.from_config_dict(
-    config_path=CONFIG_PATH
-)
+RetargetingConfig.set_default_urdf_dir(URDF_DIR)
+retargeter = RetargetingConfig.load_from_file(CONFIG_PATH).build()
 
 mp_hands = mp.solutions.hands
 hands_detector = mp_hands.Hands(
