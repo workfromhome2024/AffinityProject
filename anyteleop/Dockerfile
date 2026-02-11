@@ -21,4 +21,4 @@ COPY . .
 
 RUN mkdir -p /app/shared_media
 
-CMD ["celery", "-A", "tasks", "worker", "--loglevel=info", "--queues=anyteleop"]
+CMD ["celery", "-A", "tasks", "worker", "--loglevel=info", "--queues=anyteleop", "--pool=solo"]
