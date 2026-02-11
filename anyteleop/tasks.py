@@ -24,6 +24,12 @@ retargeter = retargeting_config.build()
 num_fixed = len(retargeter.optimizer.idx_pin2fixed)
 default_non_target_qpos = np.zeros(num_fixed)
 
+# Human hand landmark indices matching YAML config:
+# Row 0 = origin indices, Row 1 = task indices
+# [[0,0,0,0,0], [4,8,12,16,20]]
+human_origin_indices = retargeting_config.target_link_human_indices[0]  # [0,0,0,0,0]
+human_task_indices = retargeting_config.target_link_human_indices[1]    # [4,8,12,16,20]
+
 mp_hands = mp.solutions.hands
 hands_detector = mp_hands.Hands(
     static_image_mode=False,
@@ -60,9 +66,13 @@ def process_video(video_path):
                     [lm.x, lm.y, lm.z] for lm in hand_landmarks.landmark
                 ])
 
-                # Stage 2: Dex-retargeting
-                # The config handles the mapping from 21 points to robot joints
-                robot_qpos = retargeter.retarget(landmarks_array, fixed_qpos=default_non_target_qpos)
+                # Extract direction vectors from landmarks matching the YAML config
+                # ref_value shape: (N, 3) where N = number of finger vectors (5)
+                origin_pts = landmarks_array[human_origin_indices]  # (5, 3)
+                task_pts = landmarks_array[human_task_indices]      # (5, 3)
+                ref_value = task_pts - origin_pts                   # (5, 3) direction vectors
+
+                robot_qpos = retargeter.retarget(ref_value, fixed_qpos=default_non_target_qpos)
                 all_robot_qpos.append(robot_qpos.tolist())
             else:
                 # --- IMPROVEMENT 3: Sequence Stability ---
