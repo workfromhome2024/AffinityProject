@@ -1,6 +1,7 @@
 import os
 import base64
 
+from django.http import FileResponse, Http404
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, JSONParser
@@ -152,3 +153,39 @@ class RoboChatView(APIView):
             {"reply": reply},
             status=200,
         )
+
+
+class RobotPhysicalModelView(APIView):
+    """Serve URDF and mesh files from the robot description directory."""
+
+    def get(self, request, filepath):
+        base_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            'anyteleop', 'robot', 'g1_description',
+        )
+        full_path = os.path.normpath(os.path.join(base_dir, filepath))
+
+        # Path traversal protection
+        if not full_path.startswith(os.path.normpath(base_dir)):
+            raise Http404
+
+        if not os.path.isfile(full_path):
+            raise Http404
+
+        # Determine content type
+        ext = os.path.splitext(full_path)[1].lower()
+        content_types = {
+            '.urdf': 'application/xml',
+            '.xml': 'application/xml',
+            '.stl': 'application/octet-stream',
+            '.dae': 'application/xml',
+            '.obj': 'text/plain',
+            '.mtl': 'text/plain',
+        }
+        content_type = content_types.get(ext, 'application/octet-stream')
+
+        response = FileResponse(open(full_path, 'rb'), content_type=content_type)
+        response['Access-Control-Allow-Origin'] = '*'
+        response['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
+        response['Access-Control-Allow-Headers'] = 'Content-Type'
+        return response

@@ -12,6 +12,7 @@ RUN pip install --no-cache-dir django==6.0.2 djangorestframework==3.16.1 \
 
 COPY affinity/ affinity/
 COPY smolvla/ smolvla/
+COPY anyteleop/robot/g1_description/ anyteleop/robot/g1_description/
 COPY manage.py .
 
 RUN mkdir -p /app/shared_media
