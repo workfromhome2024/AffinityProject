@@ -46,7 +46,9 @@ def process_video(video_path):
 
     cap = cv2.VideoCapture(video_path)
     all_robot_qpos = []
-    
+    all_landmarks_2d = []
+    last_landmarks_2d = None
+
     try:
         while cap.isOpened():
             success, frame = cap.read()
@@ -55,6 +57,12 @@ def process_video(video_path):
 
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             results = hands_detector.process(rgb_frame)
+
+            # Collect 2D image landmarks (normalized 0-1) for frontend overlay
+            if results.multi_hand_landmarks:
+                img_landmarks = results.multi_hand_landmarks[0]
+                last_landmarks_2d = [[lm.x, lm.y] for lm in img_landmarks.landmark]
+            all_landmarks_2d.append(last_landmarks_2d)
 
             # --- IMPROVEMENT 2: World Landmarks for Metric Consistency ---
             if results.multi_hand_world_landmarks:
@@ -88,4 +96,5 @@ def process_video(video_path):
         'video_path': video_path,
         'frame_count': len(all_robot_qpos),
         'actions': all_robot_qpos,
+        'landmarks_2d': all_landmarks_2d,
     }
