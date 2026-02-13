@@ -91,10 +91,14 @@ def process_video(video_path):
     finally:
         cap.release()
 
+    # Get joint names in the same order as robot_qpos values
+    joint_names = retargeter.joint_names
+
     return {
         'status': 'completed',
         'video_path': video_path,
         'frame_count': len(all_robot_qpos),
         'actions': all_robot_qpos,
+        'joint_names': joint_names,
         'landmarks_2d': all_landmarks_2d,
     }
