@@ -1,20 +1,12 @@
 retargeting:
   type: vector
-  urdf_path: "g1_29dof_rev_1_0_with_inspire_hand_DFQ.urdf"
-  wrist_link_name: "L_hand_base_link"
+  urdf_path: "inspire_hand_viz.urdf"
+  wrist_link_name: "R_hand_base_link"
   low_pass_alpha: 0.2
   scaling_factor: 1.0
 
-  # All independent (non-mimic) joints — must include both hands since URDF has both
+  # All independent (non-mimic) joints for the right hand
   target_joint_names:
-    # Left hand
-    - "L_thumb_proximal_yaw_joint"
-    - "L_thumb_proximal_pitch_joint"
-    - "L_index_proximal_joint"
-    - "L_middle_proximal_joint"
-    - "L_ring_proximal_joint"
-    - "L_pinky_proximal_joint"
-    # Right hand (required because URDF has right hand mimic joints too)
     - "R_thumb_proximal_yaw_joint"
     - "R_thumb_proximal_pitch_joint"
     - "R_index_proximal_joint"
@@ -28,19 +20,19 @@ retargeting:
 
   # Origin links (start of each vector on the robot)
   target_origin_link_names:
-    - "L_hand_base_link"    # Thumb vector origin
-    - "L_hand_base_link"    # Index vector origin
-    - "L_hand_base_link"    # Middle vector origin
-    - "L_hand_base_link"    # Ring vector origin
-    - "L_hand_base_link"    # Pinky vector origin
+    - "R_hand_base_link"    # Thumb vector origin
+    - "R_hand_base_link"    # Index vector origin
+    - "R_hand_base_link"    # Middle vector origin
+    - "R_hand_base_link"    # Ring vector origin
+    - "R_hand_base_link"    # Pinky vector origin
 
   # Task links (end of each vector on the robot — fingertips)
   target_task_link_names:
-    - "L_thumb_distal"       # Thumb tip
-    - "L_index_intermediate" # Index tip
-    - "L_middle_intermediate"# Middle tip
-    - "L_ring_intermediate"  # Ring tip
-    - "L_pinky_intermediate" # Pinky tip
+    - "R_thumb_distal"       # Thumb tip
+    - "R_index_intermediate" # Index tip
+    - "R_middle_intermediate"# Middle tip
+    - "R_ring_intermediate"  # Ring tip
+    - "R_pinky_intermediate" # Pinky tip
 
   # MediaPipe landmark indices for human hand vectors
   # Shape must be (2, N): row 0 = origin indices, row 1 = task indices
