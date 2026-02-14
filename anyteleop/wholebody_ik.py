@@ -228,6 +228,10 @@ class WholeBodyRetargeter:
         self._q_lower = self.model.lowerPositionLimit.copy()
         self._q_upper = self.model.upperPositionLimit.copy()
 
+        # Compute robot reference limb lengths from FK in neutral config
+        # Used for per-limb scaling (arm vs leg vs torso)
+        self._robot_ref = self._compute_robot_reference_lengths()
+
     def _set_standing_pose(self, q):
         """Set a natural standing pose with arms at sides, elbows slightly bent, wrists straight."""
         standing_joints = {
@@ -266,6 +270,51 @@ class WholeBodyRetargeter:
         for name, value in standing_joints.items():
             if name in self._joint_name_to_q_idx:
                 q[self._joint_name_to_q_idx[name]] = value
+
+    def _compute_robot_reference_lengths(self):
+        """Compute robot limb lengths from FK in neutral (standing) config."""
+        pin.forwardKinematics(self.model, self.data, self._q_neutral)
+        pin.updateFramePlacements(self.model, self.data)
+
+        def frame_pos(name):
+            fid = self.model.getFrameId(name)
+            return self.data.oMf[fid].translation.copy()
+
+        # Key positions in neutral standing config
+        pelvis = np.zeros(3)  # origin
+        l_shoulder = frame_pos('left_shoulder_pitch_link')
+        r_shoulder = frame_pos('right_shoulder_pitch_link')
+        l_elbow = frame_pos('left_elbow_link')
+        r_elbow = frame_pos('right_elbow_link')
+        l_wrist = frame_pos('left_wrist_yaw_link')
+        r_wrist = frame_pos('right_wrist_yaw_link')
+        l_hip = frame_pos('left_hip_pitch_link')
+        r_hip = frame_pos('right_hip_pitch_link')
+        l_ankle = frame_pos('left_ankle_roll_link')
+        r_ankle = frame_pos('right_ankle_roll_link')
+
+        # Robot limb lengths (average left+right)
+        shoulder_center = (l_shoulder + r_shoulder) / 2.0
+        hip_center = (l_hip + r_hip) / 2.0
+
+        arm_len = (np.linalg.norm(l_wrist - l_shoulder) +
+                   np.linalg.norm(r_wrist - r_shoulder)) / 2.0
+        leg_len = (np.linalg.norm(l_ankle - l_hip) +
+                   np.linalg.norm(r_ankle - r_hip)) / 2.0
+        shoulder_width = np.linalg.norm(l_shoulder - r_shoulder)
+        torso_height = np.linalg.norm(shoulder_center - hip_center)
+
+        ref = {
+            'arm_len': arm_len,
+            'leg_len': leg_len,
+            'shoulder_width': shoulder_width,
+            'torso_height': torso_height,
+            'l_shoulder': l_shoulder,
+            'r_shoulder': r_shoulder,
+            'l_hip': l_hip,
+            'r_hip': r_hip,
+        }
+        return ref
 
     @property
     def joint_names(self):
@@ -368,6 +417,47 @@ class WholeBodyRetargeter:
                 mimic_q_idx = self._joint_name_to_q_idx[mimic_name]
                 q[mimic_q_idx] = q[parent_q_idx] * mult + offset
 
+    def _compute_limb_scales(self, landmarks_3d):
+        """Compute per-limb scale factors from human landmarks vs robot reference."""
+        # Human landmarks in MP frame (before rotation)
+        l_shoulder = landmarks_3d[MP_LEFT_SHOULDER]
+        r_shoulder = landmarks_3d[MP_RIGHT_SHOULDER]
+        l_wrist = landmarks_3d[MP_LEFT_WRIST]
+        r_wrist = landmarks_3d[MP_RIGHT_WRIST]
+        l_hip = landmarks_3d[MP_LEFT_HIP]
+        r_hip = landmarks_3d[MP_RIGHT_HIP]
+        l_ankle = landmarks_3d[MP_LEFT_ANKLE]
+        r_ankle = landmarks_3d[MP_RIGHT_ANKLE]
+
+        # Human limb lengths
+        human_arm_len = (np.linalg.norm(l_wrist - l_shoulder) +
+                         np.linalg.norm(r_wrist - r_shoulder)) / 2.0
+        human_leg_len = (np.linalg.norm(l_ankle - l_hip) +
+                         np.linalg.norm(r_ankle - r_hip)) / 2.0
+        human_shoulder_width = np.linalg.norm(l_shoulder - r_shoulder)
+
+        # Per-limb scales: robot / human
+        arm_scale = self._robot_ref['arm_len'] / max(human_arm_len, 0.01)
+        leg_scale = self._robot_ref['leg_len'] / max(human_leg_len, 0.01)
+        torso_scale = self._robot_ref['shoulder_width'] / max(human_shoulder_width, 0.01)
+
+        return {
+            'arm': arm_scale,
+            'leg': leg_scale,
+            'torso': torso_scale,
+        }
+
+    def _transform_target(self, mp_landmark, mp_anchor, robot_anchor, scale, pelvis_pos):
+        """Transform a single target: center on anchor, scale, rotate, offset to robot anchor."""
+        # Vector from human anchor to target in MP frame
+        vec_mp = mp_landmark - mp_anchor
+        # Scale by limb ratio
+        vec_scaled = vec_mp * scale
+        # Rotate to URDF frame
+        vec_urdf = MP_TO_URDF_ROTATION @ vec_scaled
+        # Place relative to robot anchor
+        return robot_anchor + vec_urdf
+
     def retarget(self, landmarks_3d, visibility=None, prev_q=None):
         """Retarget MediaPipe Pose 3D landmarks to robot joint angles.
 
@@ -381,9 +471,33 @@ class WholeBodyRetargeter:
         """
         landmarks_3d = np.asarray(landmarks_3d, dtype=np.float64)
 
-        # Compute scale and transform landmarks to URDF frame
-        scale, pelvis_pos = self._compute_scale_and_offset(landmarks_3d)
-        transformed = self._transform_landmarks(landmarks_3d, scale, pelvis_pos)
+        # Compute per-limb scales
+        limb_scales = self._compute_limb_scales(landmarks_3d)
+
+        # Human anchor positions in MP frame
+        pelvis_mp = (landmarks_3d[MP_LEFT_HIP] + landmarks_3d[MP_RIGHT_HIP]) / 2.0
+        l_shoulder_mp = landmarks_3d[MP_LEFT_SHOULDER]
+        r_shoulder_mp = landmarks_3d[MP_RIGHT_SHOULDER]
+        l_hip_mp = landmarks_3d[MP_LEFT_HIP]
+        r_hip_mp = landmarks_3d[MP_RIGHT_HIP]
+
+        # Robot anchor positions (from neutral config FK)
+        robot_l_shoulder = self._robot_ref['l_shoulder']
+        robot_r_shoulder = self._robot_ref['r_shoulder']
+        robot_l_hip = self._robot_ref['l_hip']
+        robot_r_hip = self._robot_ref['r_hip']
+
+        # Map each target: use limb-specific scale and anchor at the parent joint
+        # Arm targets: relative to shoulder, scaled by arm_scale
+        # Leg targets: relative to hip, scaled by leg_scale
+        _target_config = {
+            MP_LEFT_ELBOW:  (l_shoulder_mp, robot_l_shoulder, limb_scales['arm']),
+            MP_RIGHT_ELBOW: (r_shoulder_mp, robot_r_shoulder, limb_scales['arm']),
+            MP_LEFT_WRIST:  (l_shoulder_mp, robot_l_shoulder, limb_scales['arm']),
+            MP_RIGHT_WRIST: (r_shoulder_mp, robot_r_shoulder, limb_scales['arm']),
+            MP_LEFT_ANKLE:  (l_hip_mp,      robot_l_hip,      limb_scales['leg']),
+            MP_RIGHT_ANKLE: (r_hip_mp,      robot_r_hip,      limb_scales['leg']),
+        }
 
         # Initialize configuration
         if prev_q is not None:
@@ -396,7 +510,10 @@ class WholeBodyRetargeter:
         for fid, mp_idx, weight in self._target_frame_ids:
             if visibility is not None and visibility[mp_idx] < 0.5:
                 continue
-            target_pos = transformed[mp_idx]
+            mp_anchor, robot_anchor, scale = _target_config[mp_idx]
+            target_pos = self._transform_target(
+                landmarks_3d[mp_idx], mp_anchor, robot_anchor, scale, pelvis_mp
+            )
             targets.append((fid, target_pos, weight))
 
         if len(targets) == 0:

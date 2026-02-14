@@ -69,8 +69,7 @@ def process_video(video_path):
                 # Capture debug info for first valid frame
                 if debug_info is None:
                     import pinocchio as pin
-                    scale, pelvis_pos = retargeter._compute_scale_and_offset(landmarks_3d)
-                    transformed = retargeter._transform_landmarks(landmarks_3d, scale, pelvis_pos)
+                    limb_scales = retargeter._compute_limb_scales(landmarks_3d)
 
                     # Get robot frame positions after IK
                     q_full = retargeter.get_full_q(output_angles)
@@ -83,10 +82,8 @@ def process_video(video_path):
                         23: 'L_hip', 24: 'R_hip', 27: 'L_ankle', 28: 'R_ankle',
                     }
                     raw_lm = {}
-                    transformed_lm = {}
                     for idx, name in landmark_names.items():
                         raw_lm[name] = [round(float(v), 4) for v in landmarks_3d[idx]]
-                        transformed_lm[name] = [round(float(v), 4) for v in transformed[idx]]
 
                     robot_frames = {}
                     for fid, mp_idx, weight in retargeter._target_frame_ids:
@@ -96,10 +93,10 @@ def process_video(video_path):
 
                     debug_info = {
                         'frame_idx': frame_idx,
-                        'scale': round(float(scale), 4),
-                        'pelvis_pos_mp': [round(float(v), 4) for v in pelvis_pos],
+                        'limb_scales': {k: round(float(v), 4) for k, v in limb_scales.items()},
+                        'robot_ref': {k: ([round(float(x), 4) for x in v] if hasattr(v, '__len__') else round(float(v), 4))
+                                      for k, v in retargeter._robot_ref.items()},
                         'raw_landmarks_mp': raw_lm,
-                        'transformed_landmarks_urdf': transformed_lm,
                         'robot_frame_positions': robot_frames,
                         'first_frame_angles': {
                             name: round(float(val), 4)
