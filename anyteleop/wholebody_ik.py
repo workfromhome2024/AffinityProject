@@ -447,14 +447,27 @@ class WholeBodyRetargeter:
             'torso': torso_scale,
         }
 
-    def _transform_target(self, mp_landmark, mp_anchor, robot_anchor, scale, pelvis_pos):
-        """Transform a single target: center on anchor, scale, rotate, offset to robot anchor."""
+    def _transform_target(self, mp_landmark, mp_anchor, robot_anchor, scale, pelvis_pos,
+                           max_reach=None):
+        """Transform a single target: center on anchor, scale, rotate, offset to robot anchor.
+
+        If max_reach is set, clamp the target so it doesn't exceed that distance
+        from robot_anchor (avoids unreachable targets that cause IK divergence).
+        """
         # Vector from human anchor to target in MP frame
         vec_mp = mp_landmark - mp_anchor
         # Scale by limb ratio
         vec_scaled = vec_mp * scale
         # Rotate to URDF frame
         vec_urdf = MP_TO_URDF_ROTATION @ vec_scaled
+
+        # Clamp to max reachable distance (use 95% to avoid singularity at full extension)
+        if max_reach is not None:
+            dist = np.linalg.norm(vec_urdf)
+            limit = max_reach * 0.95
+            if dist > limit:
+                vec_urdf = vec_urdf * (limit / dist)
+
         # Place relative to robot anchor
         return robot_anchor + vec_urdf
 
@@ -488,15 +501,18 @@ class WholeBodyRetargeter:
         robot_r_hip = self._robot_ref['r_hip']
 
         # Map each target: use limb-specific scale and anchor at the parent joint
-        # Arm targets: relative to shoulder, scaled by arm_scale
-        # Leg targets: relative to hip, scaled by leg_scale
+        # Arm targets: relative to shoulder, scaled by arm_scale, clamped to arm reach
+        # Leg targets: relative to hip, scaled by leg_scale, clamped to leg reach
+        arm_reach = self._robot_ref['arm_len']
+        leg_reach = self._robot_ref['leg_len']
         _target_config = {
-            MP_LEFT_ELBOW:  (l_shoulder_mp, robot_l_shoulder, limb_scales['arm']),
-            MP_RIGHT_ELBOW: (r_shoulder_mp, robot_r_shoulder, limb_scales['arm']),
-            MP_LEFT_WRIST:  (l_shoulder_mp, robot_l_shoulder, limb_scales['arm']),
-            MP_RIGHT_WRIST: (r_shoulder_mp, robot_r_shoulder, limb_scales['arm']),
-            MP_LEFT_ANKLE:  (l_hip_mp,      robot_l_hip,      limb_scales['leg']),
-            MP_RIGHT_ANKLE: (r_hip_mp,      robot_r_hip,      limb_scales['leg']),
+            # (mp_anchor, robot_anchor, scale, max_reach)
+            MP_LEFT_ELBOW:  (l_shoulder_mp, robot_l_shoulder, limb_scales['arm'], arm_reach),
+            MP_RIGHT_ELBOW: (r_shoulder_mp, robot_r_shoulder, limb_scales['arm'], arm_reach),
+            MP_LEFT_WRIST:  (l_shoulder_mp, robot_l_shoulder, limb_scales['arm'], arm_reach),
+            MP_RIGHT_WRIST: (r_shoulder_mp, robot_r_shoulder, limb_scales['arm'], arm_reach),
+            MP_LEFT_ANKLE:  (l_hip_mp,      robot_l_hip,      limb_scales['leg'], leg_reach),
+            MP_RIGHT_ANKLE: (r_hip_mp,      robot_r_hip,      limb_scales['leg'], leg_reach),
         }
 
         # Initialize configuration
@@ -510,9 +526,10 @@ class WholeBodyRetargeter:
         for fid, mp_idx, weight in self._target_frame_ids:
             if visibility is not None and visibility[mp_idx] < 0.5:
                 continue
-            mp_anchor, robot_anchor, scale = _target_config[mp_idx]
+            mp_anchor, robot_anchor, scale, max_reach = _target_config[mp_idx]
             target_pos = self._transform_target(
-                landmarks_3d[mp_idx], mp_anchor, robot_anchor, scale, pelvis_mp
+                landmarks_3d[mp_idx], mp_anchor, robot_anchor, scale, pelvis_mp,
+                max_reach=max_reach
             )
             targets.append((fid, target_pos, weight))
 
