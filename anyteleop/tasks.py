@@ -2,7 +2,7 @@ import os
 import cv2
 import numpy as np
 import mediapipe as mp
-from wholebody_ik import WholeBodyRetargeter
+from wholebody_ik import WholeBodyRetargeter, MP_TO_URDF_ROTATION, IK_TARGETS
 from celery import Celery
 
 app = Celery('anyteleop')
@@ -34,6 +34,8 @@ def process_video(video_path):
     all_landmarks_2d = []
     last_landmarks_2d = None
     prev_q = None  # for IK continuity
+    debug_info = None  # diagnostics for first frame
+    frame_idx = 0
 
     try:
         while cap.isOpened():
@@ -63,12 +65,56 @@ def process_video(video_path):
                 output_angles = retargeter.retarget(
                     landmarks_3d, visibility=visibility, prev_q=prev_q
                 )
+
+                # Capture debug info for first valid frame
+                if debug_info is None:
+                    import pinocchio as pin
+                    scale, pelvis_pos = retargeter._compute_scale_and_offset(landmarks_3d)
+                    transformed = retargeter._transform_landmarks(landmarks_3d, scale, pelvis_pos)
+
+                    # Get robot frame positions after IK
+                    q_full = retargeter.get_full_q(output_angles)
+                    pin.forwardKinematics(retargeter.model, retargeter.data, q_full)
+                    pin.updateFramePlacements(retargeter.model, retargeter.data)
+
+                    landmark_names = {
+                        0: 'nose', 11: 'L_shoulder', 12: 'R_shoulder',
+                        13: 'L_elbow', 14: 'R_elbow', 15: 'L_wrist', 16: 'R_wrist',
+                        23: 'L_hip', 24: 'R_hip', 27: 'L_ankle', 28: 'R_ankle',
+                    }
+                    raw_lm = {}
+                    transformed_lm = {}
+                    for idx, name in landmark_names.items():
+                        raw_lm[name] = [round(float(v), 4) for v in landmarks_3d[idx]]
+                        transformed_lm[name] = [round(float(v), 4) for v in transformed[idx]]
+
+                    robot_frames = {}
+                    for fid, mp_idx in retargeter._target_frame_ids:
+                        fname = retargeter.model.frames[fid].name
+                        pos = retargeter.data.oMf[fid].translation
+                        robot_frames[fname] = [round(float(v), 4) for v in pos]
+
+                    debug_info = {
+                        'frame_idx': frame_idx,
+                        'scale': round(float(scale), 4),
+                        'pelvis_pos_mp': [round(float(v), 4) for v in pelvis_pos],
+                        'raw_landmarks_mp': raw_lm,
+                        'transformed_landmarks_urdf': transformed_lm,
+                        'robot_frame_positions': robot_frames,
+                        'first_frame_angles': {
+                            name: round(float(val), 4)
+                            for name, val in zip(retargeter.joint_names, output_angles)
+                        },
+                    }
+
                 prev_q = retargeter.get_full_q(output_angles)
                 all_robot_qpos.append(output_angles.tolist())
             else:
                 # No pose detected: repeat last frame for stability
                 last_qpos = all_robot_qpos[-1] if all_robot_qpos else [0.0] * retargeter.ndof
                 all_robot_qpos.append(last_qpos)
+
+            frame_idx += 1
 
     finally:
         cap.release()
@@ -82,4 +128,5 @@ def process_video(video_path):
         'actions': all_robot_qpos,
         'joint_names': joint_names,
         'landmarks_2d': all_landmarks_2d,
+        'debug_first_frame': debug_info,
     }

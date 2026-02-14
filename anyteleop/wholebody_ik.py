@@ -97,17 +97,28 @@ RIGHT_HAND_JOINT_NAMES = [
     'R_pinky_proximal_joint',
 ]
 
-# Coordinate transform: MediaPipe (x=right, y=down, z=forward in world landmarks)
-# to Pinocchio/URDF frame (x=forward, y=left, z=up)
-# MediaPipe world landmarks: x=right, y=up(negated actually - y points down in image coords
-# but world landmarks use y=up), z=forward(towards camera)
-# Actually MediaPipe pose world landmarks: x=right, y=up, z=towards camera
-# URDF G1 frame: x=forward, y=left, z=up
-# Transform: urdf_x = -mp_z, urdf_y = -mp_x, urdf_z = mp_y
+# Coordinate transform: MediaPipe pose_world_landmarks → Pinocchio/URDF frame
+#
+# MediaPipe world landmarks (Y-up system):
+#   - Origin: center between hips
+#   - x: person's LEFT is positive
+#   - y: UP is positive (gravity-aligned)
+#   - z: depth — increases AWAY from camera (person's backward)
+#
+# URDF G1 frame (Z-up system, standard robotics):
+#   - Origin: pelvis
+#   - x: FORWARD is positive
+#   - y: LEFT is positive
+#   - z: UP is positive
+#
+# Mapping:
+#   urdf_x (forward) = -mp_z (flip backward→forward)
+#   urdf_y (left)    =  mp_x (left→left, same sign)
+#   urdf_z (up)      =  mp_y (up→up, same sign)
 MP_TO_URDF_ROTATION = np.array([
     [0, 0, -1],   # urdf_x = -mp_z
-    [-1, 0, 0],   # urdf_y = -mp_x
-    [0, 1, 0],    # urdf_z = mp_y
+    [1, 0,  0],   # urdf_y =  mp_x  (NOT negated!)
+    [0, 1,  0],   # urdf_z =  mp_y
 ], dtype=np.float64)
 
 # Human body reference dimensions (meters, approximate)
