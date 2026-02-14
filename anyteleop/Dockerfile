@@ -13,7 +13,7 @@ RUN pip install --no-cache-dir \
     mediapipe==0.10.14 \
     opencv-python \
     numpy \
-    dex-retargeting \
+    pin \
     celery \
     redis
 

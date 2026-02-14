@@ -14,5 +14,3 @@ shared_media/
 .env
 
 # URDF/mesh files (downloaded directly on server)
-*.urdf
-*.STL
