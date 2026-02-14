@@ -28,15 +28,18 @@ MP_RIGHT_HIP = 24
 MP_LEFT_ANKLE = 27
 MP_RIGHT_ANKLE = 28
 
-# IK target frame names in the URDF and corresponding MediaPipe indices
+# IK target frame names in the URDF, corresponding MediaPipe indices, and weights.
+# head_link is excluded: it's a fixed joint that can only move via 3 waist DOF,
+# and its URDF chain position (z≈0 at pelvis) makes it unreachable, causing
+# the waist to saturate and distort all arm targets.
 IK_TARGETS = [
-    ('head_link', MP_NOSE),
-    ('left_elbow_link', MP_LEFT_ELBOW),
-    ('right_elbow_link', MP_RIGHT_ELBOW),
-    ('left_wrist_yaw_link', MP_LEFT_WRIST),
-    ('right_wrist_yaw_link', MP_RIGHT_WRIST),
-    ('left_ankle_roll_link', MP_LEFT_ANKLE),
-    ('right_ankle_roll_link', MP_RIGHT_ANKLE),
+    # (urdf_frame,              mp_index,        weight)
+    ('left_elbow_link',         MP_LEFT_ELBOW,   1.0),
+    ('right_elbow_link',        MP_RIGHT_ELBOW,  1.0),
+    ('left_wrist_yaw_link',     MP_LEFT_WRIST,   1.5),
+    ('right_wrist_yaw_link',    MP_RIGHT_WRIST,  1.5),
+    ('left_ankle_roll_link',    MP_LEFT_ANKLE,    0.8),
+    ('right_ankle_roll_link',   MP_RIGHT_ANKLE,   0.8),
 ]
 
 # Body joint names in URDF order (29 DOF)
@@ -162,10 +165,10 @@ class WholeBodyRetargeter:
 
         # Map IK target frame names to Pinocchio frame IDs
         self._target_frame_ids = []
-        for frame_name, mp_idx in IK_TARGETS:
+        for frame_name, mp_idx, weight in IK_TARGETS:
             fid = self.model.getFrameId(frame_name)
             if fid < self.model.nframes:
-                self._target_frame_ids.append((fid, mp_idx))
+                self._target_frame_ids.append((fid, mp_idx, weight))
             else:
                 print(f"Warning: frame '{frame_name}' not found in URDF")
 
@@ -388,13 +391,13 @@ class WholeBodyRetargeter:
         else:
             q = self._q_neutral.copy()
 
-        # Build IK targets: list of (frame_id, target_position)
+        # Build IK targets: list of (frame_id, target_position, weight)
         targets = []
-        for fid, mp_idx in self._target_frame_ids:
+        for fid, mp_idx, weight in self._target_frame_ids:
             if visibility is not None and visibility[mp_idx] < 0.5:
                 continue
             target_pos = transformed[mp_idx]
-            targets.append((fid, target_pos))
+            targets.append((fid, target_pos, weight))
 
         if len(targets) == 0:
             # No valid targets, return previous or neutral
@@ -410,12 +413,12 @@ class WholeBodyRetargeter:
             # Build stacked error vector and Jacobian
             errors = []
             jacobians = []
-            for fid, target_pos in targets:
+            for fid, target_pos, weight in targets:
                 # Current frame position
                 current_pos = self.data.oMf[fid].translation
 
-                # Position error
-                err = target_pos - current_pos
+                # Position error, weighted
+                err = weight * (target_pos - current_pos)
                 errors.append(err)
 
                 # Frame Jacobian (6 x nv), take only translation part (3 x nv)
@@ -424,8 +427,8 @@ class WholeBodyRetargeter:
                 )
                 J_pos = J_full[:3, :]  # 3 x nv
 
-                # Extract only IK-active columns
-                J_active = J_pos[:, self._ik_v_indices]  # 3 x nv_ik
+                # Extract only IK-active columns, weighted
+                J_active = weight * J_pos[:, self._ik_v_indices]  # 3 x nv_ik
                 jacobians.append(J_active)
 
             # Stack errors and Jacobians

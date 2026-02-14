@@ -89,7 +89,7 @@ def process_video(video_path):
                         transformed_lm[name] = [round(float(v), 4) for v in transformed[idx]]
 
                     robot_frames = {}
-                    for fid, mp_idx in retargeter._target_frame_ids:
+                    for fid, mp_idx, weight in retargeter._target_frame_ids:
                         fname = retargeter.model.frames[fid].name
                         pos = retargeter.data.oMf[fid].translation
                         robot_frames[fname] = [round(float(v), 4) for v in pos]
