@@ -126,15 +126,6 @@ MP_TO_URDF_ROTATION = np.array([
     [0, -1,  0],   # urdf_z = -mp_y  (MP y is DOWN, URDF z is UP)
 ], dtype=np.float64)
 
-# Human body reference dimensions (meters, approximate)
-HUMAN_SHOULDER_WIDTH = 0.40  # typical shoulder width
-HUMAN_HIP_WIDTH = 0.30
-
-# G1 robot reference dimensions from URDF (meters)
-# Left shoulder offset from torso: y ≈ 0.10022, z ≈ 0.24778
-# Hip offset from pelvis: y ≈ 0.064452, z ≈ -0.1027
-G1_SHOULDER_WIDTH = 0.200  # 2 * 0.10022
-G1_HIP_HEIGHT = 0.1027     # pelvis to hip
 
 
 class WholeBodyRetargeter:
@@ -214,16 +205,22 @@ class WholeBodyRetargeter:
         # Build indices for IK-active joints (legs + arms, NOT waist — waist is set directly)
         WAIST_JOINTS = {'waist_yaw_joint', 'waist_roll_joint', 'waist_pitch_joint'}
         self._ik_v_indices = []  # indices into velocity vector for IK
+        self._ik_q_indices = []  # indices into configuration vector for postural task
         for name in BODY_JOINT_NAMES:
             if name in WAIST_JOINTS:
                 continue  # waist is set directly from landmarks, not from IK
             if name in self._joint_name_to_idx:
                 jidx = self._joint_name_to_idx[name]
                 v_idx = self.model.joints[jidx].idx_v
+                q_idx = self.model.joints[jidx].idx_q
                 nv = self.model.joints[jidx].nv
+                nq = self.model.joints[jidx].nq
                 for k in range(nv):
                     self._ik_v_indices.append(v_idx + k)
+                for k in range(nq):
+                    self._ik_q_indices.append(q_idx + k)
         self._ik_v_indices = np.array(self._ik_v_indices)
+        self._ik_q_indices = np.array(self._ik_q_indices)
 
         # Natural standing pose as starting point (instead of all-zeros neutral)
         self._q_neutral = pin.neutral(self.model)
@@ -336,36 +333,6 @@ class WholeBodyRetargeter:
     def ndof(self):
         """Number of output DOF."""
         return len(self._output_joint_names)
-
-    def _compute_scale_and_offset(self, landmarks_3d):
-        """Compute scaling factor and pelvis position from human landmarks."""
-        left_shoulder = landmarks_3d[MP_LEFT_SHOULDER]
-        right_shoulder = landmarks_3d[MP_RIGHT_SHOULDER]
-        left_hip = landmarks_3d[MP_LEFT_HIP]
-        right_hip = landmarks_3d[MP_RIGHT_HIP]
-
-        # Human shoulder width
-        human_sw = np.linalg.norm(left_shoulder - right_shoulder)
-        if human_sw < 0.01:
-            human_sw = HUMAN_SHOULDER_WIDTH
-
-        # Scale factor: robot / human
-        scale = G1_SHOULDER_WIDTH / human_sw
-
-        # Pelvis position (midpoint of hips)
-        pelvis_pos = (left_hip + right_hip) / 2.0
-
-        return scale, pelvis_pos
-
-    def _transform_landmarks(self, landmarks_3d, scale, pelvis_pos):
-        """Transform MediaPipe landmarks to URDF frame, centered on pelvis."""
-        # Center on pelvis
-        centered = landmarks_3d - pelvis_pos
-        # Scale to robot proportions
-        scaled = centered * scale
-        # Rotate to URDF frame
-        transformed = (MP_TO_URDF_ROTATION @ scaled.T).T
-        return transformed
 
     def _estimate_hand_curl(self, landmarks_3d, side='right'):
         """Estimate finger curl (0=open, 1=closed) from pose landmarks.
@@ -490,7 +457,27 @@ class WholeBodyRetargeter:
         n = np.linalg.norm(vec)
         return vec / n if n > 1e-6 else np.zeros(3)
 
-    def _build_vector_targets(self, landmarks_3d, visibility):
+    def _get_current_anchors(self, q):
+        """Get current shoulder/hip positions after waist has been set.
+
+        The neutral-config anchor positions become stale once the waist is rotated.
+        This runs FK with the current q to get where the shoulders and hips
+        actually are, so vector targets are placed correctly.
+        """
+        pin.forwardKinematics(self.model, self.data, q)
+        pin.updateFramePlacements(self.model, self.data)
+
+        def fp(name):
+            return self.data.oMf[self.model.getFrameId(name)].translation.copy()
+
+        return {
+            'l_shoulder': fp('left_shoulder_pitch_link'),
+            'r_shoulder': fp('right_shoulder_pitch_link'),
+            'l_hip': fp('left_hip_pitch_link'),
+            'r_hip': fp('right_hip_pitch_link'),
+        }
+
+    def _build_vector_targets(self, landmarks_3d, visibility, anchors):
         """Build IK targets using vector-based retargeting.
 
         Instead of matching absolute positions (which depends on body proportions),
@@ -500,8 +487,10 @@ class WholeBodyRetargeter:
           knee_target   = robot_hip      + dir(human_thigh)     * robot_thigh_len
           ankle_target  = knee_target    + dir(human_shin)      * robot_shin_len
 
-        This is body-proportion independent: a tall person and a short person
-        produce the same robot pose if their limb directions match.
+        Args:
+            landmarks_3d: Raw MediaPipe landmarks
+            visibility: Per-landmark visibility scores
+            anchors: Current shoulder/hip positions from FK (after waist is set)
         """
         ref = self._robot_ref
 
@@ -536,17 +525,22 @@ class WholeBodyRetargeter:
         r_thigh_dir = mp_dir(r_hip_mp, r_knee_mp)
         r_shin_dir = mp_dir(r_knee_mp, r_ankle_mp)
 
-        # Build targets using robot's own segment lengths
-        # Arms: chain from robot shoulder
-        l_elbow_target = ref['l_shoulder'] + l_upper_arm_dir * ref['upper_arm']
+        # Use CURRENT anchor positions (after waist rotation), not neutral-config ones
+        l_shoulder = anchors['l_shoulder']
+        r_shoulder = anchors['r_shoulder']
+        l_hip = anchors['l_hip']
+        r_hip = anchors['r_hip']
+
+        # Arms: chain from current robot shoulder
+        l_elbow_target = l_shoulder + l_upper_arm_dir * ref['upper_arm']
         l_wrist_target = l_elbow_target + l_forearm_dir * ref['forearm']
-        r_elbow_target = ref['r_shoulder'] + r_upper_arm_dir * ref['upper_arm']
+        r_elbow_target = r_shoulder + r_upper_arm_dir * ref['upper_arm']
         r_wrist_target = r_elbow_target + r_forearm_dir * ref['forearm']
 
-        # Legs: chain from robot hip
-        l_knee_target = ref['l_hip'] + l_thigh_dir * ref['thigh']
+        # Legs: chain from current robot hip
+        l_knee_target = l_hip + l_thigh_dir * ref['thigh']
         l_ankle_target = l_knee_target + l_shin_dir * ref['shin']
-        r_knee_target = ref['r_hip'] + r_thigh_dir * ref['thigh']
+        r_knee_target = r_hip + r_thigh_dir * ref['thigh']
         r_ankle_target = r_knee_target + r_shin_dir * ref['shin']
 
         # Map MP indices to computed targets
@@ -571,10 +565,9 @@ class WholeBodyRetargeter:
     def retarget(self, landmarks_3d, visibility=None, prev_q=None):
         """Retarget MediaPipe Pose 3D landmarks to robot joint angles.
 
-        Uses vector-based retargeting: matches limb DIRECTIONS from the human pose
-        using the robot's own segment lengths. This is independent of human body
-        proportions — a tall person and short person produce the same robot pose
-        if their limb directions match.
+        Uses vector-based retargeting with task priorities:
+          Priority 1: Direction — align limb segments to human's unit vectors
+          Priority 2: Relaxation — postural task pulling toward default standing pose
 
         Args:
             landmarks_3d: (33, 3) array of MediaPipe pose world landmarks
@@ -595,20 +588,30 @@ class WholeBodyRetargeter:
         # Set waist orientation directly from landmarks (not IK)
         self._set_waist_from_landmarks(q, landmarks_3d)
 
-        # Build vector-based IK targets (direction × robot_length, no scaling/clamping)
-        targets = self._build_vector_targets(landmarks_3d, visibility)
+        # Get CURRENT anchor positions after waist rotation
+        # (neutral-config anchors are stale once waist is set)
+        anchors = self._get_current_anchors(q)
+
+        # Build vector-based IK targets using current anchors
+        targets = self._build_vector_targets(landmarks_3d, visibility, anchors)
 
         if len(targets) == 0:
             return self._extract_output(q)
 
-        # Damped least-squares IK iteration
+        # Postural task: pull IK-active joints toward neutral pose
+        # This resolves redundancy (7 DOF arm → 3D position = 4 DOF free)
+        # by preferring natural-looking configurations
+        POSTURE_WEIGHT = 0.1
+        q_neutral_ik = self._q_neutral[self._ik_q_indices]
+
+        # Damped least-squares IK iteration with postural regularization
         nv_ik = len(self._ik_v_indices)
         for iteration in range(self.max_iter):
             # Forward kinematics
             pin.forwardKinematics(self.model, self.data, q)
             pin.updateFramePlacements(self.model, self.data)
 
-            # Build stacked error vector and Jacobian
+            # Build stacked error vector and Jacobian for position targets
             errors = []
             jacobians = []
             for fid, target_pos, weight in targets:
@@ -622,10 +625,20 @@ class WholeBodyRetargeter:
                 J_active = weight * J_full[:3, self._ik_v_indices]
                 jacobians.append(J_active)
 
-            e = np.concatenate(errors)
-            J = np.vstack(jacobians)
+            e_task = np.concatenate(errors)
+            J_task = np.vstack(jacobians)
 
-            if np.linalg.norm(e) < self.tolerance:
+            # Postural regularization: e_posture = w * (q_neutral - q_current)
+            # This acts as a low-priority "spring" pulling joints toward neutral
+            q_current_ik = q[self._ik_q_indices]
+            e_posture = POSTURE_WEIGHT * (q_neutral_ik - q_current_ik)
+
+            # Stack: position task (high priority) + posture task (low priority)
+            e = np.concatenate([e_task, e_posture])
+            J_posture = POSTURE_WEIGHT * np.eye(nv_ik)
+            J = np.vstack([J_task, J_posture])
+
+            if np.linalg.norm(e_task) < self.tolerance:
                 break
 
             # Damped least-squares: dq = J^T (J J^T + λ²I)^{-1} e
