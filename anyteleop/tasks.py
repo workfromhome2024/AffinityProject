@@ -69,7 +69,6 @@ def process_video(video_path):
                 # Capture debug info for first valid frame
                 if debug_info is None:
                     import pinocchio as pin
-                    limb_scales = retargeter._compute_limb_scales(landmarks_3d)
 
                     # Get robot frame positions after IK
                     q_full = retargeter.get_full_q(output_angles)
@@ -79,7 +78,8 @@ def process_video(video_path):
                     landmark_names = {
                         0: 'nose', 11: 'L_shoulder', 12: 'R_shoulder',
                         13: 'L_elbow', 14: 'R_elbow', 15: 'L_wrist', 16: 'R_wrist',
-                        23: 'L_hip', 24: 'R_hip', 27: 'L_ankle', 28: 'R_ankle',
+                        23: 'L_hip', 24: 'R_hip', 25: 'L_knee', 26: 'R_knee',
+                        27: 'L_ankle', 28: 'R_ankle',
                     }
                     raw_lm = {}
                     for idx, name in landmark_names.items():
@@ -93,7 +93,6 @@ def process_video(video_path):
 
                     debug_info = {
                         'frame_idx': frame_idx,
-                        'limb_scales': {k: round(float(v), 4) for k, v in limb_scales.items()},
                         'robot_ref': {k: ([round(float(x), 4) for x in v] if hasattr(v, '__len__') else round(float(v), 4))
                                       for k, v in retargeter._robot_ref.items()},
                         'raw_landmarks_mp': raw_lm,
