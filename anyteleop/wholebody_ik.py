@@ -206,12 +206,52 @@ class WholeBodyRetargeter:
                     self._ik_v_indices.append(v_idx + k)
         self._ik_v_indices = np.array(self._ik_v_indices)
 
-        # Neutral configuration as starting point
+        # Natural standing pose as starting point (instead of all-zeros neutral)
         self._q_neutral = pin.neutral(self.model)
+        self._set_standing_pose(self._q_neutral)
 
         # Joint limits
         self._q_lower = self.model.lowerPositionLimit.copy()
         self._q_upper = self.model.upperPositionLimit.copy()
+
+    def _set_standing_pose(self, q):
+        """Set a natural standing pose with arms at sides, elbows slightly bent, wrists straight."""
+        standing_joints = {
+            # Legs: standing straight (zeros)
+            # Waist: upright (zeros)
+            # Left arm: slightly away from body, elbow bent, wrist straight
+            'left_shoulder_pitch_joint': 0.0,
+            'left_shoulder_roll_joint': 0.3,     # arm slightly outward
+            'left_shoulder_yaw_joint': 0.0,
+            'left_elbow_joint': 0.5,             # slight bend
+            'left_wrist_roll_joint': 0.0,
+            'left_wrist_pitch_joint': 0.0,
+            'left_wrist_yaw_joint': 0.0,
+            # Right arm: mirrored
+            'right_shoulder_pitch_joint': 0.0,
+            'right_shoulder_roll_joint': -0.3,   # arm slightly outward (negative for right)
+            'right_shoulder_yaw_joint': 0.0,
+            'right_elbow_joint': 0.5,            # slight bend
+            'right_wrist_roll_joint': 0.0,
+            'right_wrist_pitch_joint': 0.0,
+            'right_wrist_yaw_joint': 0.0,
+            # Hands: relaxed open
+            'L_thumb_proximal_yaw_joint': 0.1,
+            'L_thumb_proximal_pitch_joint': 0.1,
+            'L_index_proximal_joint': 0.1,
+            'L_middle_proximal_joint': 0.1,
+            'L_ring_proximal_joint': 0.1,
+            'L_pinky_proximal_joint': 0.1,
+            'R_thumb_proximal_yaw_joint': 0.1,
+            'R_thumb_proximal_pitch_joint': 0.1,
+            'R_index_proximal_joint': 0.1,
+            'R_middle_proximal_joint': 0.1,
+            'R_ring_proximal_joint': 0.1,
+            'R_pinky_proximal_joint': 0.1,
+        }
+        for name, value in standing_joints.items():
+            if name in self._joint_name_to_q_idx:
+                q[self._joint_name_to_q_idx[name]] = value
 
     @property
     def joint_names(self):
