@@ -209,9 +209,12 @@ class WholeBodyRetargeter:
                 self._output_joint_names.append(name)
                 self._output_q_indices.append(self._joint_name_to_q_idx[name])
 
-        # Build indices for IK-active joints (body only, not hands)
+        # Build indices for IK-active joints (legs + arms, NOT waist — waist is set directly)
+        WAIST_JOINTS = {'waist_yaw_joint', 'waist_roll_joint', 'waist_pitch_joint'}
         self._ik_v_indices = []  # indices into velocity vector for IK
         for name in BODY_JOINT_NAMES:
+            if name in WAIST_JOINTS:
+                continue  # waist is set directly from landmarks, not from IK
             if name in self._joint_name_to_idx:
                 jidx = self._joint_name_to_idx[name]
                 v_idx = self.model.joints[jidx].idx_v
@@ -417,6 +420,63 @@ class WholeBodyRetargeter:
                 mimic_q_idx = self._joint_name_to_q_idx[mimic_name]
                 q[mimic_q_idx] = q[parent_q_idx] * mult + offset
 
+    def _set_waist_from_landmarks(self, q, landmarks_3d):
+        """Set waist yaw/roll/pitch directly from shoulder and hip landmarks.
+
+        This avoids the IK solver tilting the torso to extreme angles.
+        """
+        l_shoulder = landmarks_3d[MP_LEFT_SHOULDER]
+        r_shoulder = landmarks_3d[MP_RIGHT_SHOULDER]
+        l_hip = landmarks_3d[MP_LEFT_HIP]
+        r_hip = landmarks_3d[MP_RIGHT_HIP]
+
+        # Shoulder and hip midpoints
+        shoulder_mid = (l_shoulder + r_shoulder) / 2.0
+        hip_mid = (l_hip + r_hip) / 2.0
+
+        # Shoulder vector (left to right) in MP frame: x=left, y=down, z=backward
+        shoulder_vec = l_shoulder - r_shoulder  # points to person's left
+
+        # Waist yaw: rotation around vertical (URDF z-axis)
+        # In MP frame, the shoulder vector is mostly along x-axis when facing camera.
+        # The z-component of the shoulder vector indicates how much the person has turned.
+        # yaw = atan2(shoulder_vec_z, shoulder_vec_x) but in URDF frame:
+        # URDF: yaw rotates around z, positive = CCW from above = turning left
+        # shoulder_vec in URDF: urdf_y = mp_x, urdf_x = -mp_z
+        # If person turns left, right shoulder comes forward (more negative mp_z),
+        # left shoulder goes backward (more positive mp_z), so mp_z difference increases.
+        shoulder_urdf_x = -(l_shoulder[2] - r_shoulder[2])  # -mp_z difference
+        shoulder_urdf_y = l_shoulder[0] - r_shoulder[0]      # mp_x difference
+        yaw = np.arctan2(shoulder_urdf_x, shoulder_urdf_y)
+
+        # Waist roll: lateral tilt (URDF rotation around x-axis)
+        # If left shoulder is lower than right, the torso tilts right.
+        # In MP: lower = more positive y. So if l_shoulder_y > r_shoulder_y, left is lower.
+        # In URDF: roll positive = tilt to robot's left
+        shoulder_height_diff = -(l_shoulder[1] - r_shoulder[1])  # URDF z = -mp_y
+        shoulder_lateral = np.linalg.norm([shoulder_urdf_y, shoulder_urdf_x])
+        roll = np.arctan2(shoulder_height_diff, max(shoulder_lateral, 0.01))
+
+        # Waist pitch: forward/backward lean (URDF rotation around y-axis)
+        # Torso vector from hip_mid to shoulder_mid
+        torso_vec = shoulder_mid - hip_mid  # in MP frame
+        torso_urdf_x = -torso_vec[2]   # forward component
+        torso_urdf_z = -torso_vec[1]    # up component
+        # When standing straight, torso is mostly vertical (urdf_z >> urdf_x)
+        # Pitch positive = lean backward
+        pitch = -np.arctan2(torso_urdf_x, max(abs(torso_urdf_z), 0.01))
+
+        # Clamp to joint limits and apply
+        for name, value in [('waist_yaw_joint', yaw),
+                            ('waist_roll_joint', roll),
+                            ('waist_pitch_joint', pitch)]:
+            if name in self._joint_name_to_q_idx:
+                q_idx = self._joint_name_to_q_idx[name]
+                jidx = self._joint_name_to_idx[name]
+                lower = self.model.lowerPositionLimit[self.model.joints[jidx].idx_q]
+                upper = self.model.upperPositionLimit[self.model.joints[jidx].idx_q]
+                q[q_idx] = np.clip(value, lower, upper)
+
     def _compute_limb_scales(self, landmarks_3d):
         """Compute per-limb scale factors from human landmarks vs robot reference."""
         # Human landmarks in MP frame (before rotation)
@@ -520,6 +580,9 @@ class WholeBodyRetargeter:
             q = prev_q.copy()
         else:
             q = self._q_neutral.copy()
+
+        # Set waist orientation directly from landmarks (not IK)
+        self._set_waist_from_landmarks(q, landmarks_3d)
 
         # Build IK targets: list of (frame_id, target_position, weight)
         targets = []
