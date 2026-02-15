@@ -47,6 +47,10 @@ def _init_models():
             cfg.MODEL.EXTRA['USE_KID'] = cfg.DATASET.USE_KID
         elif 'USE_KID' not in cfg.MODEL.get('EXTRA', {}):
             cfg.MODEL.EXTRA['USE_KID'] = True
+        # Override backbone pretrain path to use mounted models directory
+        MODELS_DIR = os.environ.get('HYBRIK_MODELS_DIR', '/app/models')
+        cfg.MODEL.HR_PRETRAINED = os.path.join(MODELS_DIR, 'pose_hrnet_w48_256x192.pth')
+        cfg.MODEL.PRETRAINED = os.path.join(MODELS_DIR, 'hybrik_model.pth')
         # HybrIK uses relative paths (e.g. ./hybrik/...) that assume cwd is repo root
         prev_cwd = os.getcwd()
         os.chdir('/opt/hybrik')
