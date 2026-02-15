@@ -19,9 +19,16 @@ RUN pip install --no-cache-dir \
     pycocotools \
     onnxruntime \
     celery \
-    redis \
-    && pip install --no-cache-dir --no-deps git+https://github.com/jeffffffli/HybrIK.git \
-    && pip install --no-cache-dir git+https://github.com/YanjieZe/GMR.git
+    redis
+
+# HybrIK: clone, relax the pinned opencv version, then install
+RUN git clone https://github.com/jeffffffli/HybrIK.git /tmp/hybrik \
+    && sed -i "s/'opencv-python==4.1.2.30'/'opencv-python'/g" /tmp/hybrik/setup.py \
+    && pip install --no-cache-dir /tmp/hybrik \
+    && rm -rf /tmp/hybrik
+
+# GMR: General Motion Retargeting
+RUN pip install --no-cache-dir git+https://github.com/YanjieZe/GMR.git
 
 COPY . .
 
