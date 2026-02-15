@@ -20,7 +20,7 @@ RUN pip install --no-cache-dir \
     onnxruntime \
     celery \
     redis \
-    && pip install --no-cache-dir git+https://github.com/jeffffffli/HybrIK.git \
+    && pip install --no-cache-dir --no-deps git+https://github.com/jeffffffli/HybrIK.git \
     && pip install --no-cache-dir git+https://github.com/YanjieZe/GMR.git
 
 COPY . .
