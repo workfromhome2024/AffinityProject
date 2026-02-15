@@ -111,12 +111,56 @@ def get_hybrik_output(image_nchw):
         'root_transl': output.transl.numpy(),
         'body_pose': output.pred_theta_mat.numpy(),
         'joints_3d': output.pred_uvd_jts.numpy(),
+        'joints_3d_global': output.pred_xyz_hybrik.numpy(),
     }
+
+
+# SMPL-X joint names (first 22 body joints, matching HybrIK-X output order)
+SMPLX_JOINT_NAMES = [
+    'pelvis', 'left_hip', 'right_hip', 'spine1', 'left_knee', 'right_knee',
+    'spine2', 'left_ankle', 'right_ankle', 'spine3', 'left_foot', 'right_foot',
+    'neck', 'left_collar', 'right_collar', 'head', 'left_shoulder', 'right_shoulder',
+    'left_elbow', 'right_elbow', 'left_wrist', 'right_wrist',
+]
+
+# Coordinate correction: SMPL-X (Y-up) to GMR (Z-up)
+_COORD_CORRECTION = np.array([[1, 0, 0], [0, 0, -1], [0, 1, 0]], dtype=np.float64)
+
+
+def _rotmat_to_quat_wxyz(R):
+    """Convert a 3x3 rotation matrix to quaternion in (w, x, y, z) order."""
+    from scipy.spatial.transform import Rotation
+    q = Rotation.from_matrix(R).as_quat()  # returns (x, y, z, w)
+    return np.array([q[3], q[0], q[1], q[2]])
+
+
+def hybrik_to_human_data(hybrik_output):
+    """Convert HybrIK output to GMR's expected human_data format.
+
+    GMR expects: {joint_name: [position_3d, quaternion_wxyz]}
+    """
+    # Squeeze batch dimension
+    positions = hybrik_output['joints_3d_global'].squeeze(0)  # (num_joints, 3)
+    rotmats = hybrik_output['body_pose'].squeeze(0)           # (num_joints, 3, 3)
+
+    num_joints = min(len(SMPLX_JOINT_NAMES), positions.shape[0], rotmats.shape[0])
+
+    human_data = {}
+    for i in range(num_joints):
+        name = SMPLX_JOINT_NAMES[i]
+        # Apply coordinate correction
+        pos = _COORD_CORRECTION @ positions[i]
+        rot = _COORD_CORRECTION @ rotmats[i] @ _COORD_CORRECTION.T
+        quat = _rotmat_to_quat_wxyz(rot)
+        human_data[name] = [pos, quat]
+
+    return human_data
 
 
 def retarget_frame(hybrik_output):
     """Retarget HybrIK output to G1 robot joint angles via GMR."""
-    return retargeter.retarget(hybrik_output)
+    human_data = hybrik_to_human_data(hybrik_output)
+    return retargeter.retarget(human_data)
 
 
 @app.task(name='anyteleop.process_video')
