@@ -21,11 +21,10 @@ RUN pip install --no-cache-dir \
     celery \
     redis
 
-# HybrIK: clone, relax the pinned opencv version, then install
-RUN git clone https://github.com/jeffffffli/HybrIK.git /tmp/hybrik \
-    && sed -i "s/'opencv-python==4.1.2.30'/'opencv-python'/g" /tmp/hybrik/setup.py \
-    && pip install --no-cache-dir /tmp/hybrik \
-    && rm -rf /tmp/hybrik
+# HybrIK: clone into image, relax opencv pin, editable install (keeps source in place)
+RUN git clone https://github.com/jeffffffli/HybrIK.git /opt/hybrik \
+    && sed -i "s/'opencv-python==4.1.2.30'/'opencv-python'/g" /opt/hybrik/setup.py \
+    && pip install --no-cache-dir -e /opt/hybrik
 
 # GMR: General Motion Retargeting
 RUN pip install --no-cache-dir git+https://github.com/YanjieZe/GMR.git
