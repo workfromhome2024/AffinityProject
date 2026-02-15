@@ -1,10 +1,7 @@
 import os
 import cv2
 import numpy as np
-import torch
-import onnxruntime as ort
 from celery import Celery
-from general_motion_retargeting.motion_retarget import GeneralMotionRetargeting
 
 app = Celery('anyteleop')
 app.config_from_object({
@@ -12,42 +9,61 @@ app.config_from_object({
     'result_backend': os.environ.get('REDIS_URL', 'redis://localhost:6379/0'),
 })
 
-# Force CPU device
-device = torch.device('cpu')
-
-# HybrIK model — prefer ONNX for faster CPU inference, fall back to PyTorch
-HYBRIK_ONNX_PATH = os.environ.get('HYBRIK_ONNX_PATH', 'hybrik.onnx')
-HYBRIK_PTH_PATH = os.environ.get('HYBRIK_PTH_PATH', 'hybrik_model.pth')
-HYBRIK_CONFIG_PATH = os.environ.get('HYBRIK_CONFIG_PATH', 'configs/256x192_adam_all.yaml')
-
-ort_session = None
-hybrik_model = None
-
-if os.path.exists(HYBRIK_ONNX_PATH):
-    ort_session = ort.InferenceSession(HYBRIK_ONNX_PATH, providers=['CPUExecutionProvider'])
-else:
-    from hybrik.models import builder
-    from hybrik.utils.config import update_config
-
-    cfg = update_config(HYBRIK_CONFIG_PATH)
-    hybrik_model = builder.build_sppe(cfg.MODEL).to(device).eval()
-    state_dict = torch.load(HYBRIK_PTH_PATH, map_location=device)
-    hybrik_model.load_state_dict(state_dict)
-
-# GMR retargeter for G1 robot
-retargeter = GeneralMotionRetargeting(
-    src_human='smplx',
-    tgt_robot='g1',
-)
-
 # HybrIK input image size
 HYBRIK_INPUT_SIZE = (256, 192)
+
+# Lazy-loaded globals (initialized on first task call)
+_initialized = False
+ort_session = None
+hybrik_model = None
+retargeter = None
+device = None
+
+
+def _init_models():
+    """Lazy-load HybrIK and GMR on first task invocation."""
+    global _initialized, ort_session, hybrik_model, retargeter, device
+    if _initialized:
+        return
+
+    import torch
+    device = torch.device('cpu')
+
+    # HybrIK — prefer ONNX, fall back to PyTorch
+    HYBRIK_ONNX_PATH = os.environ.get('HYBRIK_ONNX_PATH', 'hybrik.onnx')
+    HYBRIK_PTH_PATH = os.environ.get('HYBRIK_PTH_PATH', 'hybrik_model.pth')
+    HYBRIK_CONFIG_PATH = os.environ.get('HYBRIK_CONFIG_PATH', 'configs/256x192_adam_all.yaml')
+
+    if os.path.exists(HYBRIK_ONNX_PATH):
+        import onnxruntime as ort
+        ort_session = ort.InferenceSession(HYBRIK_ONNX_PATH, providers=['CPUExecutionProvider'])
+    elif os.path.exists(HYBRIK_PTH_PATH):
+        from hybrik.models import builder
+        from hybrik.utils.config import update_config
+
+        cfg = update_config(HYBRIK_CONFIG_PATH)
+        hybrik_model = builder.build_sppe(cfg.MODEL).to(device).eval()
+        state_dict = torch.load(HYBRIK_PTH_PATH, map_location=device)
+        hybrik_model.load_state_dict(state_dict)
+    else:
+        raise FileNotFoundError(
+            f"No HybrIK model found. Provide either {HYBRIK_ONNX_PATH} or {HYBRIK_PTH_PATH}"
+        )
+
+    # GMR retargeter
+    from general_motion_retargeting.motion_retarget import GeneralMotionRetargeting
+    retargeter = GeneralMotionRetargeting(
+        src_human='smplx',
+        tgt_robot='g1',
+    )
+
+    _initialized = True
 
 
 def preprocess_frame(bgr_frame):
     """Preprocess a BGR video frame for HybrIK input.
 
-    Resizes to 256x192, normalizes to ImageNet stats, returns a (1,3,H,W) tensor/array.
+    Resizes to 256x192, normalizes to ImageNet stats, returns a (1,3,H,W) array.
     """
     rgb = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
     resized = cv2.resize(rgb, (HYBRIK_INPUT_SIZE[1], HYBRIK_INPUT_SIZE[0]))
@@ -61,10 +77,9 @@ def preprocess_frame(bgr_frame):
 
 
 def get_hybrik_output(image_nchw):
-    """Run HybrIK inference on a preprocessed image array.
+    """Run HybrIK inference on a preprocessed image array."""
+    import torch
 
-    Returns a dict with root_transl, body_pose (rotation matrices), and joints_3d.
-    """
     if ort_session is not None:
         input_name = ort_session.get_inputs()[0].name
         outputs = ort_session.run(None, {input_name: image_nchw})
@@ -91,6 +106,8 @@ def retarget_frame(hybrik_output):
 
 @app.task(name='anyteleop.process_video')
 def process_video(video_path):
+    _init_models()
+
     if not os.path.exists(video_path):
         return {'error': f'Video not found: {video_path}'}
 
