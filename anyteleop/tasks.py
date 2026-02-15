@@ -47,7 +47,13 @@ def _init_models():
             cfg.MODEL.EXTRA['USE_KID'] = cfg.DATASET.USE_KID
         elif 'USE_KID' not in cfg.MODEL.get('EXTRA', {}):
             cfg.MODEL.EXTRA['USE_KID'] = True
-        hybrik_model = builder.build_sppe(cfg.MODEL).to(device).eval()
+        # HybrIK uses relative paths (e.g. ./hybrik/...) that assume cwd is repo root
+        prev_cwd = os.getcwd()
+        os.chdir('/opt/hybrik')
+        try:
+            hybrik_model = builder.build_sppe(cfg.MODEL).to(device).eval()
+        finally:
+            os.chdir(prev_cwd)
         state_dict = torch.load(HYBRIK_PTH_PATH, map_location=device)
         hybrik_model.load_state_dict(state_dict)
     else:
