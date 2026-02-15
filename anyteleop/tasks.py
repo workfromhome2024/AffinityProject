@@ -69,7 +69,7 @@ def _init_models():
     from general_motion_retargeting.motion_retarget import GeneralMotionRetargeting
     retargeter = GeneralMotionRetargeting(
         src_human='smplx',
-        tgt_robot='g1',
+        tgt_robot='unitree_g1_with_hands',
     )
 
     _initialized = True
