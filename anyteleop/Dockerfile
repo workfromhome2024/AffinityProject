@@ -21,6 +21,9 @@ RUN pip install --no-cache-dir \
     celery \
     redis
 
+# Lightweight pytorch3d shim (only rotation conversions needed by HybrIK)
+COPY pytorch3d_shim/ /usr/local/lib/python3.10/site-packages/pytorch3d/
+
 # HybrIK: clone into image, relax opencv pin, editable install (keeps source in place)
 RUN git clone https://github.com/jeffffffli/HybrIK.git /opt/hybrik \
     && sed -i "s/'opencv-python==4.1.2.30'/'opencv-python'/g" /opt/hybrik/setup.py \
