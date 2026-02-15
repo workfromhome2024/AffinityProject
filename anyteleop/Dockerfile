@@ -29,8 +29,11 @@ RUN git clone https://github.com/jeffffffli/HybrIK.git /opt/hybrik \
     && sed -i "s/'opencv-python==4.1.2.30'/'opencv-python'/g" /opt/hybrik/setup.py \
     && pip install --no-cache-dir -e /opt/hybrik
 
-# GMR: General Motion Retargeting (editable install to keep assets/ in place)
-RUN git clone https://github.com/YanjieZe/GMR.git /opt/gmr \
+# GMR: General Motion Retargeting (sparse checkout — only unitree_g1 assets)
+RUN git clone --no-checkout --filter=blob:none https://github.com/YanjieZe/GMR.git /opt/gmr \
+    && cd /opt/gmr \
+    && git sparse-checkout set --no-cone '/*' '!/assets/*' '/assets/unitree_g1/**' \
+    && git checkout \
     && pip install --no-cache-dir -e /opt/gmr
 
 COPY . .
