@@ -4,7 +4,7 @@ import numpy as np
 import torch
 import onnxruntime as ort
 from celery import Celery
-from gmr.retargeter import Retargeter
+from general_motion_retargeting.motion_retarget import GeneralMotionRetargeting
 
 app = Celery('anyteleop')
 app.config_from_object({
@@ -35,11 +35,10 @@ else:
     hybrik_model.load_state_dict(state_dict)
 
 # GMR retargeter for G1 robot
-URDF_PATH = os.environ.get(
-    'G1_URDF_PATH',
-    '/app/robot/g1_description/g1_29dof_rev_1_0_with_inspire_hand_DFQ.urdf',
+retargeter = GeneralMotionRetargeting(
+    src_human='smplx',
+    tgt_robot='g1',
 )
-retargeter = Retargeter(robot_name='g1', urdf_path=URDF_PATH)
 
 # HybrIK input image size
 HYBRIK_INPUT_SIZE = (256, 192)
@@ -87,7 +86,7 @@ def get_hybrik_output(image_nchw):
 
 def retarget_frame(hybrik_output):
     """Retarget HybrIK output to G1 robot joint angles via GMR."""
-    return retargeter.solve(hybrik_output, pos_weight=1.0, rot_weight=0.5)
+    return retargeter.retarget(hybrik_output)
 
 
 @app.task(name='anyteleop.process_video')
