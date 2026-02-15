@@ -398,8 +398,14 @@ class WholeBodyRetargeter:
     def _set_waist_from_landmarks(self, q, landmarks_3d):
         """Set waist yaw/roll/pitch directly from shoulder and hip landmarks.
 
-        This avoids the IK solver tilting the torso to extreme angles.
+        Uses a deadzone + damping strategy to keep the torso upright by default.
+        MediaPipe landmarks fluctuate, so small deviations are zeroed out and
+        larger movements are attenuated. This prevents the robot from hunching
+        or tilting when the human is approximately standing straight.
         """
+        DEADZONE = 0.15   # ignore rotations below ~8.6 degrees (MP noise)
+        GAIN = 0.3        # attenuate remaining signal (only 30% passes through)
+
         l_shoulder = landmarks_3d[MP_LEFT_SHOULDER]
         r_shoulder = landmarks_3d[MP_RIGHT_SHOULDER]
         l_hip = landmarks_3d[MP_LEFT_HIP]
@@ -409,37 +415,32 @@ class WholeBodyRetargeter:
         shoulder_mid = (l_shoulder + r_shoulder) / 2.0
         hip_mid = (l_hip + r_hip) / 2.0
 
-        # Shoulder vector (left to right) in MP frame: x=left, y=down, z=backward
-        shoulder_vec = l_shoulder - r_shoulder  # points to person's left
-
         # Waist yaw: rotation around vertical (URDF z-axis)
-        # In MP frame, the shoulder vector is mostly along x-axis when facing camera.
-        # The z-component of the shoulder vector indicates how much the person has turned.
-        # yaw = atan2(shoulder_vec_z, shoulder_vec_x) but in URDF frame:
-        # URDF: yaw rotates around z, positive = CCW from above = turning left
-        # shoulder_vec in URDF: urdf_y = mp_x, urdf_x = -mp_z
-        # If person turns left, right shoulder comes forward (more negative mp_z),
-        # left shoulder goes backward (more positive mp_z), so mp_z difference increases.
         shoulder_urdf_x = -(l_shoulder[2] - r_shoulder[2])  # -mp_z difference
         shoulder_urdf_y = l_shoulder[0] - r_shoulder[0]      # mp_x difference
         yaw = np.arctan2(shoulder_urdf_x, shoulder_urdf_y)
 
-        # Waist roll: lateral tilt (URDF rotation around x-axis)
-        # If left shoulder is lower than right, the torso tilts right.
-        # In MP: lower = more positive y. So if l_shoulder_y > r_shoulder_y, left is lower.
-        # In URDF: roll positive = tilt to robot's left
+        # Waist roll: lateral tilt
         shoulder_height_diff = -(l_shoulder[1] - r_shoulder[1])  # URDF z = -mp_y
         shoulder_lateral = np.linalg.norm([shoulder_urdf_y, shoulder_urdf_x])
         roll = np.arctan2(shoulder_height_diff, max(shoulder_lateral, 0.01))
 
-        # Waist pitch: forward/backward lean (URDF rotation around y-axis)
-        # Torso vector from hip_mid to shoulder_mid
-        torso_vec = shoulder_mid - hip_mid  # in MP frame
-        torso_urdf_x = -torso_vec[2]   # forward component
-        torso_urdf_z = -torso_vec[1]    # up component
-        # When standing straight, torso is mostly vertical (urdf_z >> urdf_x)
-        # Pitch positive = lean backward
+        # Waist pitch: forward/backward lean
+        torso_vec = shoulder_mid - hip_mid
+        torso_urdf_x = -torso_vec[2]
+        torso_urdf_z = -torso_vec[1]
         pitch = -np.arctan2(torso_urdf_x, max(abs(torso_urdf_z), 0.01))
+
+        # Apply deadzone + damping: zero out small angles (noise),
+        # attenuate larger ones to keep torso mostly upright
+        def dampen(angle):
+            if abs(angle) < DEADZONE:
+                return 0.0
+            return GAIN * (angle - np.sign(angle) * DEADZONE)
+
+        yaw = dampen(yaw)
+        roll = dampen(roll)
+        pitch = dampen(pitch)
 
         # Clamp to joint limits and apply
         for name, value in [('waist_yaw_joint', yaw),
@@ -477,15 +478,57 @@ class WholeBodyRetargeter:
             'r_hip': fp('right_hip_pitch_link'),
         }
 
+    def _compute_crouch_ankle(self, hip_mp, knee_mp, ankle_mp, robot_hip, ref):
+        """Compute ankle target using crouch-percentage method.
+
+        Instead of raw direction chaining (which is noisy for legs), compute how
+        much the human's leg is extended as a percentage of full leg length.
+        Apply that same percentage to the G1's leg length.
+
+        This ensures legs only bend when the human actually crouches, and
+        stay straight when standing.
+        """
+        # Human leg segment lengths
+        human_thigh_len = np.linalg.norm(knee_mp - hip_mp)
+        human_shin_len = np.linalg.norm(ankle_mp - knee_mp)
+        human_full_leg = human_thigh_len + human_shin_len
+
+        if human_full_leg < 0.01:
+            # Fallback: straight down at full extension
+            return robot_hip + np.array([0, 0, -ref['full_leg']])
+
+        # Hip-to-ankle vector in URDF frame
+        hip_to_ankle_urdf = MP_TO_URDF_ROTATION @ (ankle_mp - hip_mp)
+
+        # Vertical drop (z component, should be negative = downward)
+        vertical_drop = abs(hip_to_ankle_urdf[2])
+
+        # Crouch percentage: how extended is the leg vertically?
+        # 1.0 = fully extended (standing straight), 0.0 = fully crouched
+        crouch_pct = np.clip(vertical_drop / human_full_leg, 0.0, 1.0)
+
+        # Horizontal offset (x,y) from the human, scaled to robot proportions
+        horizontal = hip_to_ankle_urdf[:2]  # xy components in URDF
+        human_horizontal_dist = np.linalg.norm(horizontal)
+
+        # Scale horizontal offset: ratio of robot/human leg length
+        h_scale = ref['full_leg'] / human_full_leg
+        robot_horizontal = horizontal * h_scale
+
+        # Robot ankle: below hip at crouch_pct * G1_full_leg, with horizontal offset
+        robot_vertical = crouch_pct * ref['full_leg']
+        ankle_target = robot_hip.copy()
+        ankle_target[0] += robot_horizontal[0]  # forward/back
+        ankle_target[1] += robot_horizontal[1]  # lateral
+        ankle_target[2] -= robot_vertical        # downward
+
+        return ankle_target
+
     def _build_vector_targets(self, landmarks_3d, visibility, anchors):
         """Build IK targets using vector-based retargeting.
 
-        Instead of matching absolute positions (which depends on body proportions),
-        we match limb DIRECTIONS using the robot's own segment lengths:
-          elbow_target  = robot_shoulder + dir(human_upper_arm) * robot_upper_arm_len
-          wrist_target  = elbow_target   + dir(human_forearm)   * robot_forearm_len
-          knee_target   = robot_hip      + dir(human_thigh)     * robot_thigh_len
-          ankle_target  = knee_target    + dir(human_shin)      * robot_shin_len
+        Arms: direction-based chaining (robot segment lengths x human limb directions)
+        Legs: crouch-percentage method (vertical drop ratio, not raw directions)
 
         Args:
             landmarks_3d: Raw MediaPipe landmarks
@@ -494,7 +537,7 @@ class WholeBodyRetargeter:
         """
         ref = self._robot_ref
 
-        # Human limb vectors in MediaPipe frame
+        # Human limb landmarks in MediaPipe frame
         l_shoulder_mp = landmarks_3d[MP_LEFT_SHOULDER]
         r_shoulder_mp = landmarks_3d[MP_RIGHT_SHOULDER]
         l_elbow_mp = landmarks_3d[MP_LEFT_ELBOW]
@@ -513,19 +556,13 @@ class WholeBodyRetargeter:
             """Direction from start to end landmark, rotated to URDF frame."""
             return self._dir(MP_TO_URDF_ROTATION @ (end - start))
 
-        # Arm directions
+        # --- ARMS: direction-based chaining ---
         l_upper_arm_dir = mp_dir(l_shoulder_mp, l_elbow_mp)
         l_forearm_dir = mp_dir(l_elbow_mp, l_wrist_mp)
         r_upper_arm_dir = mp_dir(r_shoulder_mp, r_elbow_mp)
         r_forearm_dir = mp_dir(r_elbow_mp, r_wrist_mp)
 
-        # Leg directions
-        l_thigh_dir = mp_dir(l_hip_mp, l_knee_mp)
-        l_shin_dir = mp_dir(l_knee_mp, l_ankle_mp)
-        r_thigh_dir = mp_dir(r_hip_mp, r_knee_mp)
-        r_shin_dir = mp_dir(r_knee_mp, r_ankle_mp)
-
-        # Use CURRENT anchor positions (after waist rotation), not neutral-config ones
+        # Use CURRENT anchor positions (after waist rotation)
         l_shoulder = anchors['l_shoulder']
         r_shoulder = anchors['r_shoulder']
         l_hip = anchors['l_hip']
@@ -537,11 +574,13 @@ class WholeBodyRetargeter:
         r_elbow_target = r_shoulder + r_upper_arm_dir * ref['upper_arm']
         r_wrist_target = r_elbow_target + r_forearm_dir * ref['forearm']
 
-        # Legs: chain from current robot hip
-        l_knee_target = l_hip + l_thigh_dir * ref['thigh']
-        l_ankle_target = l_knee_target + l_shin_dir * ref['shin']
-        r_knee_target = r_hip + r_thigh_dir * ref['thigh']
-        r_ankle_target = r_knee_target + r_shin_dir * ref['shin']
+        # --- LEGS: crouch-percentage method ---
+        # Use vertical drop ratio instead of raw direction chaining, so legs
+        # stay straight when standing and only bend when actually crouching
+        l_ankle_target = self._compute_crouch_ankle(
+            l_hip_mp, l_knee_mp, l_ankle_mp, l_hip, ref)
+        r_ankle_target = self._compute_crouch_ankle(
+            r_hip_mp, r_knee_mp, r_ankle_mp, r_hip, ref)
 
         # Map MP indices to computed targets
         target_positions = {
@@ -566,8 +605,9 @@ class WholeBodyRetargeter:
         """Retarget MediaPipe Pose 3D landmarks to robot joint angles.
 
         Uses vector-based retargeting with task priorities:
-          Priority 1: Direction — align limb segments to human's unit vectors
-          Priority 2: Relaxation — postural task pulling toward default standing pose
+          Priority 1 (Balance): Keep torso pointing up via "global up" constraint
+          Priority 2 (Direction): Align limb segments to human's unit vectors
+          Priority 3 (Relaxation): Postural task pulling toward default standing pose
 
         Args:
             landmarks_3d: (33, 3) array of MediaPipe pose world landmarks
@@ -585,11 +625,10 @@ class WholeBodyRetargeter:
         else:
             q = self._q_neutral.copy()
 
-        # Set waist orientation directly from landmarks (not IK)
+        # Set waist orientation directly from landmarks (with deadzone + damping)
         self._set_waist_from_landmarks(q, landmarks_3d)
 
         # Get CURRENT anchor positions after waist rotation
-        # (neutral-config anchors are stale once waist is set)
         anchors = self._get_current_anchors(q)
 
         # Build vector-based IK targets using current anchors
@@ -598,20 +637,24 @@ class WholeBodyRetargeter:
         if len(targets) == 0:
             return self._extract_output(q)
 
-        # Postural task: pull IK-active joints toward neutral pose
-        # This resolves redundancy (7 DOF arm → 3D position = 4 DOF free)
-        # by preferring natural-looking configurations
-        POSTURE_WEIGHT = 0.1
+        # Task weights
+        POSTURE_WEIGHT = 0.15   # postural relaxation (pull toward standing)
+        UPRIGHT_WEIGHT = 2.0    # "global up" constraint (keep torso vertical)
+
         q_neutral_ik = self._q_neutral[self._ik_q_indices]
 
-        # Damped least-squares IK iteration with postural regularization
+        # Torso "global up" constraint: keep torso_link's z-axis aligned with world z
+        torso_fid = self.model.getFrameId('torso_link')
+        has_torso = torso_fid < self.model.nframes
+
+        # Damped least-squares IK iteration with task priorities
         nv_ik = len(self._ik_v_indices)
         for iteration in range(self.max_iter):
             # Forward kinematics
             pin.forwardKinematics(self.model, self.data, q)
             pin.updateFramePlacements(self.model, self.data)
 
-            # Build stacked error vector and Jacobian for position targets
+            # === Task 1: Limb position targets ===
             errors = []
             jacobians = []
             for fid, target_pos, weight in targets:
@@ -628,17 +671,46 @@ class WholeBodyRetargeter:
             e_task = np.concatenate(errors)
             J_task = np.vstack(jacobians)
 
-            # Postural regularization: e_posture = w * (q_neutral - q_current)
-            # This acts as a low-priority "spring" pulling joints toward neutral
+            # === Task 2: "Global up" constraint ===
+            # Keep torso z-axis (column 2 of rotation matrix) aligned with world [0,0,1]
+            # Error = desired_up - current_up (3D vector)
+            if has_torso:
+                torso_rot = self.data.oMf[torso_fid].rotation  # 3x3 rotation
+                current_up = torso_rot[:, 2]  # local z-axis in world frame
+                desired_up = np.array([0.0, 0.0, 1.0])
+                e_up = UPRIGHT_WEIGHT * (desired_up - current_up)
+
+                # Jacobian for the orientation part (rows 3:6) of the frame Jacobian
+                J_torso_full = pin.computeFrameJacobian(
+                    self.model, self.data, q, torso_fid, pin.ReferenceFrame.LOCAL_WORLD_ALIGNED
+                )
+                # The angular Jacobian maps dq → angular velocity ω
+                # d(R[:,2])/dt = ω × R[:,2], so we use the skew-symmetric relation
+                # For small ω: Δup ≈ ω × current_up = -[current_up]× ω
+                # Jacobian: J_up = -[current_up]× J_angular
+                J_angular = J_torso_full[3:6, self._ik_v_indices]
+                skew = np.array([
+                    [0, -current_up[2], current_up[1]],
+                    [current_up[2], 0, -current_up[0]],
+                    [-current_up[1], current_up[0], 0],
+                ])
+                J_up = UPRIGHT_WEIGHT * (-skew @ J_angular)
+
+                e_task = np.concatenate([e_task, e_up])
+                J_task = np.vstack([J_task, J_up])
+
+            # === Task 3: Postural relaxation ===
             q_current_ik = q[self._ik_q_indices]
             e_posture = POSTURE_WEIGHT * (q_neutral_ik - q_current_ik)
 
-            # Stack: position task (high priority) + posture task (low priority)
+            # Stack all tasks
             e = np.concatenate([e_task, e_posture])
             J_posture = POSTURE_WEIGHT * np.eye(nv_ik)
             J = np.vstack([J_task, J_posture])
 
-            if np.linalg.norm(e_task) < self.tolerance:
+            # Check convergence on position targets only
+            pos_error = np.linalg.norm(np.concatenate(errors))
+            if pos_error < self.tolerance:
                 break
 
             # Damped least-squares: dq = J^T (J J^T + λ²I)^{-1} e
