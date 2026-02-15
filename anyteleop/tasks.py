@@ -147,15 +147,9 @@ def hybrik_to_human_data(hybrik_output):
     logger = logging.getLogger(__name__)
     logger.warning(f"positions shape: {positions_raw.shape}, rotmats shape: {rotmats_raw.shape}")
 
-    # Reshape if needed: positions should be (N, 3), rotmats should be (N, 3, 3)
-    if positions_raw.ndim == 1:
-        positions = positions_raw.reshape(-1, 3)
-    else:
-        positions = positions_raw
-    if rotmats_raw.ndim == 2:
-        rotmats = rotmats_raw.reshape(-1, 3, 3)
-    else:
-        rotmats = rotmats_raw
+    # Reshape to expected dimensions: positions (N, 3), rotmats (N, 3, 3)
+    positions = positions_raw.reshape(-1, 3)
+    rotmats = rotmats_raw.reshape(-1, 3, 3)
 
     logger.warning(f"reshaped positions: {positions.shape}, rotmats: {rotmats.shape}")
 
