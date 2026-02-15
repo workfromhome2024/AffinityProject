@@ -9,8 +9,8 @@ app.config_from_object({
     'result_backend': os.environ.get('REDIS_URL', 'redis://localhost:6379/0'),
 })
 
-# HybrIK input image size
-HYBRIK_INPUT_SIZE = (256, 192)
+# HybrIK input image size (H, W) — must match config IMAGE_SIZE
+HYBRIK_INPUT_SIZE = (256, 256)
 
 # Lazy-loaded globals (initialized on first task call)
 _initialized = False
