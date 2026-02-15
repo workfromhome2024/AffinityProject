@@ -29,8 +29,9 @@ RUN git clone https://github.com/jeffffffli/HybrIK.git /opt/hybrik \
     && sed -i "s/'opencv-python==4.1.2.30'/'opencv-python'/g" /opt/hybrik/setup.py \
     && pip install --no-cache-dir -e /opt/hybrik
 
-# GMR: General Motion Retargeting
-RUN pip install --no-cache-dir git+https://github.com/YanjieZe/GMR.git
+# GMR: General Motion Retargeting (editable install to keep assets/ in place)
+RUN git clone https://github.com/YanjieZe/GMR.git /opt/gmr \
+    && pip install --no-cache-dir -e /opt/gmr
 
 COPY . .
 
