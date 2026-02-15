@@ -139,9 +139,25 @@ def hybrik_to_human_data(hybrik_output):
 
     GMR expects: {joint_name: [position_3d, quaternion_wxyz]}
     """
-    # Squeeze batch dimension
-    positions = hybrik_output['joints_3d_global'].squeeze(0)  # (num_joints, 3)
-    rotmats = hybrik_output['body_pose'].squeeze(0)           # (num_joints, 3, 3)
+    # Squeeze batch dimension and reshape
+    positions_raw = hybrik_output['joints_3d_global'].squeeze()
+    rotmats_raw = hybrik_output['body_pose'].squeeze()
+
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.warning(f"positions shape: {positions_raw.shape}, rotmats shape: {rotmats_raw.shape}")
+
+    # Reshape if needed: positions should be (N, 3), rotmats should be (N, 3, 3)
+    if positions_raw.ndim == 1:
+        positions = positions_raw.reshape(-1, 3)
+    else:
+        positions = positions_raw
+    if rotmats_raw.ndim == 2:
+        rotmats = rotmats_raw.reshape(-1, 3, 3)
+    else:
+        rotmats = rotmats_raw
+
+    logger.warning(f"reshaped positions: {positions.shape}, rotmats: {rotmats.shape}")
 
     num_joints = min(len(SMPLX_JOINT_NAMES), positions.shape[0], rotmats.shape[0])
 
