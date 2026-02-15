@@ -42,6 +42,11 @@ def _init_models():
         from hybrik.utils.config import update_config
 
         cfg = update_config(HYBRIK_CONFIG_PATH)
+        # Propagate USE_KID from DATASET into MODEL.EXTRA where the model expects it
+        if 'USE_KID' in cfg.get('DATASET', {}):
+            cfg.MODEL.EXTRA['USE_KID'] = cfg.DATASET.USE_KID
+        elif 'USE_KID' not in cfg.MODEL.get('EXTRA', {}):
+            cfg.MODEL.EXTRA['USE_KID'] = True
         hybrik_model = builder.build_sppe(cfg.MODEL).to(device).eval()
         state_dict = torch.load(HYBRIK_PTH_PATH, map_location=device)
         hybrik_model.load_state_dict(state_dict)
