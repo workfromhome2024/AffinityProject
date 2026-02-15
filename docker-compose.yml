@@ -26,6 +26,7 @@ services:
     volumes:
       - shared_media:/app/shared_media
       - ./models:/app/models:ro
+      - ./models:/opt/hybrik/model_files:ro
     depends_on:
       - redis
     environment:
