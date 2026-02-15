@@ -25,11 +25,15 @@ services:
       dockerfile: Dockerfile
     volumes:
       - shared_media:/app/shared_media
+      - ./models:/app/models:ro
     depends_on:
       - redis
     environment:
       - REDIS_URL=redis://redis:6379/0
       - SHARED_MEDIA_ROOT=/app/shared_media
+      - HYBRIK_ONNX_PATH=/app/models/hybrik.onnx
+      - HYBRIK_PTH_PATH=/app/models/hybrik_model.pth
+      - HYBRIK_CONFIG_PATH=/opt/hybrik/configs/256x192_adam_all.yaml
 
 volumes:
   shared_media:
