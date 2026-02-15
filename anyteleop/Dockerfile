@@ -10,10 +10,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install --no-cache-dir \
     torch --index-url https://download.pytorch.org/whl/cpu \
     && pip install --no-cache-dir \
-    mediapipe==0.10.14 \
+    hybrik \
+    gmr \
+    onnxruntime \
     opencv-python \
     numpy \
-    pin \
     celery \
     redis
 

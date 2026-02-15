@@ -1,9 +1,10 @@
 import os
 import cv2
 import numpy as np
-import mediapipe as mp
-from wholebody_ik import WholeBodyRetargeter, MP_TO_URDF_ROTATION, IK_TARGETS
+import torch
+import onnxruntime as ort
 from celery import Celery
+from gmr.retargeter import Retargeter
 
 app = Celery('anyteleop')
 app.config_from_object({
@@ -11,18 +12,83 @@ app.config_from_object({
     'result_backend': os.environ.get('REDIS_URL', 'redis://localhost:6379/0'),
 })
 
-# Initialize whole-body retargeter with full G1 URDF
-URDF_PATH = "/app/robot/g1_description/g1_29dof_rev_1_0_with_inspire_hand_DFQ.urdf"
-retargeter = WholeBodyRetargeter(URDF_PATH, damping=1e-2, max_iter=50, tolerance=1e-3)
+# Force CPU device
+device = torch.device('cpu')
 
-# MediaPipe Pose detector (full body, 33 landmarks)
-mp_pose = mp.solutions.pose
-pose_detector = mp_pose.Pose(
-    static_image_mode=False,
-    model_complexity=2,
-    min_detection_confidence=0.7,
-    min_tracking_confidence=0.5,
+# HybrIK model — prefer ONNX for faster CPU inference, fall back to PyTorch
+HYBRIK_ONNX_PATH = os.environ.get('HYBRIK_ONNX_PATH', 'hybrik.onnx')
+HYBRIK_PTH_PATH = os.environ.get('HYBRIK_PTH_PATH', 'hybrik_model.pth')
+HYBRIK_CONFIG_PATH = os.environ.get('HYBRIK_CONFIG_PATH', 'configs/256x192_adam_all.yaml')
+
+ort_session = None
+hybrik_model = None
+
+if os.path.exists(HYBRIK_ONNX_PATH):
+    ort_session = ort.InferenceSession(HYBRIK_ONNX_PATH, providers=['CPUExecutionProvider'])
+else:
+    from hybrik.models import builder
+    from hybrik.utils.config import update_config
+
+    cfg = update_config(HYBRIK_CONFIG_PATH)
+    hybrik_model = builder.build_sppe(cfg.MODEL).to(device).eval()
+    state_dict = torch.load(HYBRIK_PTH_PATH, map_location=device)
+    hybrik_model.load_state_dict(state_dict)
+
+# GMR retargeter for G1 robot
+URDF_PATH = os.environ.get(
+    'G1_URDF_PATH',
+    '/app/robot/g1_description/g1_29dof_rev_1_0_with_inspire_hand_DFQ.urdf',
 )
+retargeter = Retargeter(robot_name='g1', urdf_path=URDF_PATH)
+
+# HybrIK input image size
+HYBRIK_INPUT_SIZE = (256, 192)
+
+
+def preprocess_frame(bgr_frame):
+    """Preprocess a BGR video frame for HybrIK input.
+
+    Resizes to 256x192, normalizes to ImageNet stats, returns a (1,3,H,W) tensor/array.
+    """
+    rgb = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
+    resized = cv2.resize(rgb, (HYBRIK_INPUT_SIZE[1], HYBRIK_INPUT_SIZE[0]))
+    img = resized.astype(np.float32) / 255.0
+    mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+    std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+    img = (img - mean) / std
+    # HWC -> CHW -> NCHW
+    img = img.transpose(2, 0, 1)[np.newaxis, ...]
+    return img
+
+
+def get_hybrik_output(image_nchw):
+    """Run HybrIK inference on a preprocessed image array.
+
+    Returns a dict with root_transl, body_pose (rotation matrices), and joints_3d.
+    """
+    if ort_session is not None:
+        input_name = ort_session.get_inputs()[0].name
+        outputs = ort_session.run(None, {input_name: image_nchw})
+        return {
+            'root_transl': outputs[0],
+            'body_pose': outputs[1],
+            'joints_3d': outputs[2],
+        }
+
+    input_tensor = torch.from_numpy(image_nchw).to(device)
+    with torch.no_grad():
+        output = hybrik_model(input_tensor)
+    return {
+        'root_transl': output.transl.numpy(),
+        'body_pose': output.pred_theta_mats.numpy(),
+        'joints_3d': output.pred_uvd.numpy(),
+    }
+
+
+def retarget_frame(hybrik_output):
+    """Retarget HybrIK output to G1 robot joint angles via GMR."""
+    return retargeter.solve(hybrik_output, pos_weight=1.0, rot_weight=0.5)
+
 
 @app.task(name='anyteleop.process_video')
 def process_video(video_path):
@@ -31,10 +97,8 @@ def process_video(video_path):
 
     cap = cv2.VideoCapture(video_path)
     all_robot_qpos = []
-    all_landmarks_2d = []
-    last_landmarks_2d = None
-    prev_q = None  # for IK continuity
-    debug_info = None  # diagnostics for first frame
+    all_joints_3d = []
+    debug_info = None
     frame_idx = 0
 
     try:
@@ -43,81 +107,37 @@ def process_video(video_path):
             if not success:
                 break
 
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            results = pose_detector.process(rgb_frame)
+            image_nchw = preprocess_frame(frame)
+            hybrik_out = get_hybrik_output(image_nchw)
 
-            # Collect 2D image landmarks (normalized 0-1) for frontend overlay
-            if results.pose_landmarks:
-                last_landmarks_2d = [
-                    [lm.x, lm.y] for lm in results.pose_landmarks.landmark
-                ]
-            all_landmarks_2d.append(last_landmarks_2d)
-
-            # Use 3D world landmarks for IK
-            if results.pose_world_landmarks:
-                world_lm = results.pose_world_landmarks.landmark
-
-                landmarks_3d = np.array([
-                    [lm.x, lm.y, lm.z] for lm in world_lm
-                ])
-                visibility = np.array([lm.visibility for lm in world_lm])
-
-                output_angles = retargeter.retarget(
-                    landmarks_3d, visibility=visibility, prev_q=prev_q
-                )
-
-                # Capture debug info for first valid frame
-                if debug_info is None:
-                    import pinocchio as pin
-
-                    # Get robot frame positions after IK
-                    q_full = retargeter.get_full_q(output_angles)
-                    pin.forwardKinematics(retargeter.model, retargeter.data, q_full)
-                    pin.updateFramePlacements(retargeter.model, retargeter.data)
-
-                    landmark_names = {
-                        0: 'nose', 11: 'L_shoulder', 12: 'R_shoulder',
-                        13: 'L_elbow', 14: 'R_elbow', 15: 'L_wrist', 16: 'R_wrist',
-                        23: 'L_hip', 24: 'R_hip', 25: 'L_knee', 26: 'R_knee',
-                        27: 'L_ankle', 28: 'R_ankle',
-                    }
-                    raw_lm = {}
-                    for idx, name in landmark_names.items():
-                        raw_lm[name] = [round(float(v), 4) for v in landmarks_3d[idx]]
-
-                    robot_frames = {}
-                    for fid, mp_idx, weight in retargeter._target_frame_ids:
-                        fname = retargeter.model.frames[fid].name
-                        pos = retargeter.data.oMf[fid].translation
-                        robot_frames[fname] = [round(float(v), 4) for v in pos]
-
-                    debug_info = {
-                        'frame_idx': frame_idx,
-                        'ik_iterations': getattr(retargeter, '_last_ik_iterations', None),
-                        'ik_pos_error': round(float(getattr(retargeter, '_last_ik_error', 0)), 6),
-                        'robot_ref': {k: ([round(float(x), 4) for x in v] if hasattr(v, '__len__') else round(float(v), 4))
-                                      for k, v in retargeter._robot_ref.items()},
-                        'raw_landmarks_mp': raw_lm,
-                        'robot_frame_positions': robot_frames,
-                        'first_frame_angles': {
-                            name: round(float(val), 4)
-                            for name, val in zip(retargeter.joint_names, output_angles)
-                        },
-                    }
-
-                prev_q = retargeter.get_full_q(output_angles)
-                all_robot_qpos.append(output_angles.tolist())
+            # Store 3D joint positions for frontend visualization
+            joints_3d = hybrik_out['joints_3d']
+            if joints_3d.ndim >= 2:
+                all_joints_3d.append(joints_3d.squeeze().tolist())
             else:
-                # No pose detected: repeat last frame for stability
-                last_qpos = all_robot_qpos[-1] if all_robot_qpos else [0.0] * retargeter.ndof
-                all_robot_qpos.append(last_qpos)
+                all_joints_3d.append(joints_3d.tolist())
+
+            # Retarget to robot joint angles
+            robot_q = retarget_frame(hybrik_out)
+            robot_q_list = robot_q.tolist() if hasattr(robot_q, 'tolist') else list(robot_q)
+            all_robot_qpos.append(robot_q_list)
+
+            # Capture debug info for first frame
+            if debug_info is None:
+                debug_info = {
+                    'frame_idx': frame_idx,
+                    'root_transl': hybrik_out['root_transl'].squeeze().tolist(),
+                    'body_pose_shape': list(hybrik_out['body_pose'].shape),
+                    'joints_3d_shape': list(joints_3d.shape),
+                    'first_frame_robot_q': robot_q_list,
+                }
 
             frame_idx += 1
 
     finally:
         cap.release()
 
-    joint_names = retargeter.joint_names
+    joint_names = retargeter.joint_names if hasattr(retargeter, 'joint_names') else []
 
     return {
         'status': 'completed',
@@ -125,6 +145,6 @@ def process_video(video_path):
         'frame_count': len(all_robot_qpos),
         'actions': all_robot_qpos,
         'joint_names': joint_names,
-        'landmarks_2d': all_landmarks_2d,
+        'joints_3d': all_joints_3d,
         'debug_first_frame': debug_info,
     }
