@@ -21,8 +21,12 @@ MP_LEFT_ELBOW = 13
 MP_RIGHT_ELBOW = 14
 MP_LEFT_WRIST = 15
 MP_RIGHT_WRIST = 16
+MP_LEFT_PINKY = 17
+MP_RIGHT_PINKY = 18
 MP_LEFT_INDEX = 19
 MP_RIGHT_INDEX = 20
+MP_LEFT_THUMB = 21
+MP_RIGHT_THUMB = 22
 MP_LEFT_HIP = 23
 MP_RIGHT_HIP = 24
 MP_LEFT_KNEE = 25
@@ -40,6 +44,8 @@ IK_TARGETS = [
     ('right_elbow_link',        MP_RIGHT_ELBOW,  1.0),
     ('left_wrist_yaw_link',     MP_LEFT_WRIST,   1.5),
     ('right_wrist_yaw_link',    MP_RIGHT_WRIST,  1.5),
+    ('left_knee_link',          MP_LEFT_KNEE,     0.4),
+    ('right_knee_link',         MP_RIGHT_KNEE,    0.4),
     ('left_ankle_roll_link',    MP_LEFT_ANKLE,    0.8),
     ('right_ankle_roll_link',   MP_RIGHT_ANKLE,   0.8),
 ]
@@ -335,40 +341,47 @@ class WholeBodyRetargeter:
         return len(self._output_joint_names)
 
     def _estimate_hand_curl(self, landmarks_3d, side='right'):
-        """Estimate finger curl (0=open, 1=closed) from pose landmarks.
+        """Estimate finger and thumb curl (0=open, 1=closed) from pose landmarks.
 
-        Uses the distance between wrist and index/pinky fingertip landmarks
-        relative to hand size to estimate curl.
+        Uses index, pinky, and thumb fingertip distances from the wrist,
+        normalized by forearm length as a scale reference.
+
+        Returns:
+            (finger_curl, thumb_curl) tuple, each in range [0, 1]
         """
         if side == 'left':
-            wrist_idx = MP_LEFT_WRIST
-            index_idx = MP_LEFT_INDEX
+            wrist_idx, elbow_idx = MP_LEFT_WRIST, MP_LEFT_ELBOW
+            index_idx, pinky_idx, thumb_idx = MP_LEFT_INDEX, MP_LEFT_PINKY, MP_LEFT_THUMB
         else:
-            wrist_idx = MP_RIGHT_WRIST
-            index_idx = MP_RIGHT_INDEX
+            wrist_idx, elbow_idx = MP_RIGHT_WRIST, MP_RIGHT_ELBOW
+            index_idx, pinky_idx, thumb_idx = MP_RIGHT_INDEX, MP_RIGHT_PINKY, MP_RIGHT_THUMB
 
         wrist = landmarks_3d[wrist_idx]
-        index_tip = landmarks_3d[index_idx]
 
-        # Distance from wrist to index tip
-        dist = np.linalg.norm(index_tip - wrist)
-
-        # Normalize by forearm length (elbow to wrist) as reference
-        elbow_idx = MP_LEFT_ELBOW if side == 'left' else MP_RIGHT_ELBOW
+        # Forearm length as scale reference
         forearm_len = np.linalg.norm(landmarks_3d[elbow_idx] - wrist)
         if forearm_len < 0.01:
-            return 0.5  # default half-curl
+            return 0.5, 0.5  # default half-curl
 
-        # When fingers are extended, index tip is ~0.6x forearm length from wrist
-        # When curled, it's much closer (~0.1x)
-        ratio = dist / forearm_len
-        curl = np.clip(1.0 - (ratio / 0.6), 0.0, 1.0)
-        return curl
+        # Finger curl: average of index and pinky distances
+        index_dist = np.linalg.norm(landmarks_3d[index_idx] - wrist)
+        pinky_dist = np.linalg.norm(landmarks_3d[pinky_idx] - wrist)
+        avg_finger_dist = (index_dist + pinky_dist) / 2.0
+        finger_ratio = avg_finger_dist / forearm_len
+        # Extended fingers ~0.6x forearm length, curled ~0.1x
+        finger_curl = np.clip(1.0 - (finger_ratio / 0.6), 0.0, 1.0)
+
+        # Thumb curl: separate estimation (thumb is shorter, ~0.4x when extended)
+        thumb_dist = np.linalg.norm(landmarks_3d[thumb_idx] - wrist)
+        thumb_ratio = thumb_dist / forearm_len
+        thumb_curl = np.clip(1.0 - (thumb_ratio / 0.4), 0.0, 1.0)
+
+        return finger_curl, thumb_curl
 
     def _set_hand_joints(self, q, landmarks_3d):
         """Set hand joint angles based on heuristic finger curl estimation."""
         for side, joint_names in [('left', LEFT_HAND_JOINT_NAMES), ('right', RIGHT_HAND_JOINT_NAMES)]:
-            curl = self._estimate_hand_curl(landmarks_3d, side)
+            finger_curl, thumb_curl = self._estimate_hand_curl(landmarks_3d, side)
 
             for jname in joint_names:
                 if jname not in self._joint_name_to_q_idx:
@@ -380,13 +393,13 @@ class WholeBodyRetargeter:
                 lower = self.model.lowerPositionLimit[self.model.joints[jidx].idx_q]
                 upper = self.model.upperPositionLimit[self.model.joints[jidx].idx_q]
 
-                # Map curl (0-1) to joint range
-                if 'thumb_proximal_yaw' in jname:
-                    # Thumb yaw: partial curl
-                    q[q_idx] = lower + curl * 0.5 * (upper - lower)
+                if 'thumb' in jname:
+                    # Thumb joints use thumb_curl, yaw gets partial range
+                    scale = 0.5 if 'yaw' in jname else 1.0
+                    q[q_idx] = lower + thumb_curl * scale * (upper - lower)
                 else:
-                    # Other fingers: full curl range
-                    q[q_idx] = lower + curl * (upper - lower)
+                    # Index/middle/ring/pinky use finger_curl
+                    q[q_idx] = lower + finger_curl * (upper - lower)
 
         # Apply mimic joints
         for mimic_name, (parent_name, mult, offset) in self._mimic_relations.items():
@@ -478,15 +491,15 @@ class WholeBodyRetargeter:
             'r_hip': fp('right_hip_pitch_link'),
         }
 
-    def _compute_crouch_ankle(self, hip_mp, knee_mp, ankle_mp, robot_hip, ref):
-        """Compute ankle target using crouch-percentage method.
+    def _compute_leg_targets(self, hip_mp, knee_mp, ankle_mp, robot_hip, ref):
+        """Compute knee and ankle targets using crouch-percentage method.
 
         Instead of raw direction chaining (which is noisy for legs), compute how
         much the human's leg is extended as a percentage of full leg length.
         Apply that same percentage to the G1's leg length.
 
-        This ensures legs only bend when the human actually crouches, and
-        stay straight when standing.
+        Returns:
+            (knee_target, ankle_target) tuple of 3D positions in URDF frame
         """
         # Human leg segment lengths
         human_thigh_len = np.linalg.norm(knee_mp - hip_mp)
@@ -495,7 +508,9 @@ class WholeBodyRetargeter:
 
         if human_full_leg < 0.01:
             # Fallback: straight down at full extension
-            return robot_hip + np.array([0, 0, -ref['full_leg']])
+            knee_target = robot_hip + np.array([0.0, 0.0, -ref['thigh']])
+            ankle_target = robot_hip + np.array([0.0, 0.0, -ref['full_leg']])
+            return knee_target, ankle_target
 
         # Hip-to-ankle vector in URDF frame
         hip_to_ankle_urdf = MP_TO_URDF_ROTATION @ (ankle_mp - hip_mp)
@@ -507,22 +522,30 @@ class WholeBodyRetargeter:
         # 1.0 = fully extended (standing straight), 0.0 = fully crouched
         crouch_pct = np.clip(vertical_drop / human_full_leg, 0.0, 1.0)
 
-        # Horizontal offset (x,y) from the human, scaled to robot proportions
-        horizontal = hip_to_ankle_urdf[:2]  # xy components in URDF
-        human_horizontal_dist = np.linalg.norm(horizontal)
-
         # Scale horizontal offset: ratio of robot/human leg length
         h_scale = ref['full_leg'] / human_full_leg
+        horizontal = hip_to_ankle_urdf[:2]  # xy components in URDF
         robot_horizontal = horizontal * h_scale
 
-        # Robot ankle: below hip at crouch_pct * G1_full_leg, with horizontal offset
+        # Ankle target: below hip at crouch_pct * G1_full_leg
         robot_vertical = crouch_pct * ref['full_leg']
         ankle_target = robot_hip.copy()
-        ankle_target[0] += robot_horizontal[0]  # forward/back
-        ankle_target[1] += robot_horizontal[1]  # lateral
-        ankle_target[2] -= robot_vertical        # downward
+        ankle_target[0] += robot_horizontal[0]
+        ankle_target[1] += robot_horizontal[1]
+        ankle_target[2] -= robot_vertical
 
-        return ankle_target
+        # Knee target: interpolate between hip and ankle using thigh/leg ratio
+        # Use human's hip-to-knee direction for horizontal placement
+        hip_to_knee_urdf = MP_TO_URDF_ROTATION @ (knee_mp - hip_mp)
+        knee_horizontal = hip_to_knee_urdf[:2] * h_scale
+        knee_vertical_drop = abs(hip_to_knee_urdf[2])
+        knee_crouch_pct = np.clip(knee_vertical_drop / human_full_leg, 0.0, 1.0)
+        knee_target = robot_hip.copy()
+        knee_target[0] += knee_horizontal[0]
+        knee_target[1] += knee_horizontal[1]
+        knee_target[2] -= knee_crouch_pct * ref['full_leg']
+
+        return knee_target, ankle_target
 
     def _build_vector_targets(self, landmarks_3d, visibility, anchors):
         """Build IK targets using vector-based retargeting.
@@ -576,10 +599,11 @@ class WholeBodyRetargeter:
 
         # --- LEGS: crouch-percentage method ---
         # Use vertical drop ratio instead of raw direction chaining, so legs
-        # stay straight when standing and only bend when actually crouching
-        l_ankle_target = self._compute_crouch_ankle(
+        # stay straight when standing and only bend when actually crouching.
+        # Also computes knee targets for smoother leg motion during strides.
+        l_knee_target, l_ankle_target = self._compute_leg_targets(
             l_hip_mp, l_knee_mp, l_ankle_mp, l_hip, ref)
-        r_ankle_target = self._compute_crouch_ankle(
+        r_knee_target, r_ankle_target = self._compute_leg_targets(
             r_hip_mp, r_knee_mp, r_ankle_mp, r_hip, ref)
 
         # Map MP indices to computed targets
@@ -588,6 +612,8 @@ class WholeBodyRetargeter:
             MP_RIGHT_ELBOW: r_elbow_target,
             MP_LEFT_WRIST: l_wrist_target,
             MP_RIGHT_WRIST: r_wrist_target,
+            MP_LEFT_KNEE: l_knee_target,
+            MP_RIGHT_KNEE: r_knee_target,
             MP_LEFT_ANKLE: l_ankle_target,
             MP_RIGHT_ANKLE: r_ankle_target,
         }
@@ -646,9 +672,15 @@ class WholeBodyRetargeter:
         # Torso "global up" constraint: keep torso_link's z-axis aligned with world z
         torso_fid = self.model.getFrameId('torso_link')
         has_torso = torso_fid < self.model.nframes
+        if not has_torso and not hasattr(self, '_torso_warned'):
+            print("Warning: 'torso_link' frame not found in URDF — "
+                  "global up constraint disabled. Check URDF frame names.")
+            self._torso_warned = True
 
         # Damped least-squares IK iteration with task priorities
         nv_ik = len(self._ik_v_indices)
+        final_iteration = 0
+        final_pos_error = float('inf')
         for iteration in range(self.max_iter):
             # Forward kinematics
             pin.forwardKinematics(self.model, self.data, q)
@@ -710,6 +742,8 @@ class WholeBodyRetargeter:
 
             # Check convergence on position targets only
             pos_error = np.linalg.norm(np.concatenate(errors))
+            final_iteration = iteration
+            final_pos_error = pos_error
             if pos_error < self.tolerance:
                 break
 
@@ -726,6 +760,10 @@ class WholeBodyRetargeter:
             for i in range(self.model.nq):
                 if self._q_lower[i] < self._q_upper[i]:
                     q[i] = np.clip(q[i], self._q_lower[i], self._q_upper[i])
+
+        # Store convergence info for diagnostics
+        self._last_ik_iterations = final_iteration + 1
+        self._last_ik_error = final_pos_error
 
         # Set hand joints via heuristic
         self._set_hand_joints(q, landmarks_3d)

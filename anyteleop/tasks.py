@@ -93,6 +93,8 @@ def process_video(video_path):
 
                     debug_info = {
                         'frame_idx': frame_idx,
+                        'ik_iterations': getattr(retargeter, '_last_ik_iterations', None),
+                        'ik_pos_error': round(float(getattr(retargeter, '_last_ik_error', 0)), 6),
                         'robot_ref': {k: ([round(float(x), 4) for x in v] if hasattr(v, '__len__') else round(float(v), 4))
                                       for k, v in retargeter._robot_ref.items()},
                         'raw_landmarks_mp': raw_lm,
