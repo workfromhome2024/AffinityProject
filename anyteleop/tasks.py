@@ -109,8 +109,8 @@ def get_hybrik_output(image_nchw):
         output = hybrik_model(input_tensor)
     return {
         'root_transl': output.transl.numpy(),
-        'body_pose': output.pred_theta_mats.numpy(),
-        'joints_3d': output.pred_uvd.numpy(),
+        'body_pose': output.pred_theta_mat.numpy(),
+        'joints_3d': output.pred_uvd_jts.numpy(),
     }
 
 
