@@ -123,8 +123,53 @@ SMPLX_JOINT_NAMES = [
     'left_elbow', 'right_elbow', 'left_wrist', 'right_wrist',
 ]
 
-# Coordinate correction: SMPL-X (Y-up) to GMR (Z-up)
-_COORD_CORRECTION = np.array([[1, 0, 0], [0, 0, -1], [0, 1, 0]], dtype=np.float64)
+# GMR qpos layout: [3 root_pos + 4 root_quat + 43 joint DOFs]
+# These are the 43 actuated joint names from the MuJoCo G1-with-hands model,
+# in the order they appear in the qpos vector (after the 7-value root).
+GMR_JOINT_NAMES = [
+    'left_hip_pitch_joint', 'left_hip_roll_joint', 'left_hip_yaw_joint',
+    'left_knee_joint', 'left_ankle_pitch_joint', 'left_ankle_roll_joint',
+    'right_hip_pitch_joint', 'right_hip_roll_joint', 'right_hip_yaw_joint',
+    'right_knee_joint', 'right_ankle_pitch_joint', 'right_ankle_roll_joint',
+    'waist_yaw_joint', 'waist_roll_joint', 'waist_pitch_joint',
+    'left_shoulder_pitch_joint', 'left_shoulder_roll_joint', 'left_shoulder_yaw_joint',
+    'left_elbow_joint', 'left_wrist_roll_joint', 'left_wrist_pitch_joint', 'left_wrist_yaw_joint',
+    'left_hand_thumb_0_joint', 'left_hand_thumb_1_joint', 'left_hand_thumb_2_joint',
+    'left_hand_middle_0_joint', 'left_hand_middle_1_joint',
+    'left_hand_index_0_joint', 'left_hand_index_1_joint',
+    'right_shoulder_pitch_joint', 'right_shoulder_roll_joint', 'right_shoulder_yaw_joint',
+    'right_elbow_joint', 'right_wrist_roll_joint', 'right_wrist_pitch_joint', 'right_wrist_yaw_joint',
+    'right_hand_thumb_0_joint', 'right_hand_thumb_1_joint', 'right_hand_thumb_2_joint',
+    'right_hand_index_0_joint', 'right_hand_index_1_joint',
+    'right_hand_middle_0_joint', 'right_hand_middle_1_joint',
+]
+
+# SMPL-X kinematic tree: parent index for each of the first 22 body joints.
+# -1 means root (pelvis has no parent).
+SMPLX_PARENTS = [
+    -1,  # 0  pelvis
+     0,  # 1  left_hip       ← pelvis
+     0,  # 2  right_hip      ← pelvis
+     0,  # 3  spine1         ← pelvis
+     1,  # 4  left_knee      ← left_hip
+     2,  # 5  right_knee     ← right_hip
+     3,  # 6  spine2         ← spine1
+     4,  # 7  left_ankle     ← left_knee
+     5,  # 8  right_ankle    ← right_knee
+     6,  # 9  spine3         ← spine2
+     7,  # 10 left_foot      ← left_ankle
+     8,  # 11 right_foot     ← right_ankle
+     9,  # 12 neck           ← spine3
+     9,  # 13 left_collar    ← spine3
+     9,  # 14 right_collar   ← spine3
+    12,  # 15 head           ← neck
+    13,  # 16 left_shoulder  ← left_collar
+    14,  # 17 right_shoulder ← right_collar
+    16,  # 18 left_elbow     ← left_shoulder
+    17,  # 19 right_elbow    ← right_shoulder
+    18,  # 20 left_wrist     ← left_elbow
+    19,  # 21 right_wrist    ← right_elbow
+]
 
 
 def _rotmat_to_quat_wxyz(R):
@@ -137,31 +182,37 @@ def _rotmat_to_quat_wxyz(R):
 def hybrik_to_human_data(hybrik_output):
     """Convert HybrIK output to GMR's expected human_data format.
 
-    GMR expects: {joint_name: [position_3d, quaternion_wxyz]}
+    GMR expects: {joint_name: [global_position_3d, global_quaternion_wxyz]}
+    Positions and rotations stay in SMPL-X native frame (Y-up).
+    GMR's IK config handles the Y-up to Z-up mapping internally.
+
+    HybrIK's pred_theta_mat contains LOCAL rotation matrices per joint,
+    so we chain them through the kinematic tree to get global orientations.
     """
     # Squeeze batch dimension and reshape
     positions_raw = hybrik_output['joints_3d_global'].squeeze()
     rotmats_raw = hybrik_output['body_pose'].squeeze()
 
-    import logging
-    logger = logging.getLogger(__name__)
-    logger.warning(f"positions shape: {positions_raw.shape}, rotmats shape: {rotmats_raw.shape}")
-
     # Reshape to expected dimensions: positions (N, 3), rotmats (N, 3, 3)
     positions = positions_raw.reshape(-1, 3)
     rotmats = rotmats_raw.reshape(-1, 3, 3)
 
-    logger.warning(f"reshaped positions: {positions.shape}, rotmats: {rotmats.shape}")
-
     num_joints = min(len(SMPLX_JOINT_NAMES), positions.shape[0], rotmats.shape[0])
+
+    # Chain local rotations into global orientations: global[i] = global[parent] @ local[i]
+    global_rots = [None] * num_joints
+    for i in range(num_joints):
+        parent = SMPLX_PARENTS[i]
+        if parent < 0 or global_rots[parent] is None:
+            global_rots[i] = rotmats[i]
+        else:
+            global_rots[i] = global_rots[parent] @ rotmats[i]
 
     human_data = {}
     for i in range(num_joints):
         name = SMPLX_JOINT_NAMES[i]
-        # Apply coordinate correction
-        pos = _COORD_CORRECTION @ positions[i]
-        rot = _COORD_CORRECTION @ rotmats[i] @ _COORD_CORRECTION.T
-        quat = _rotmat_to_quat_wxyz(rot)
+        pos = positions[i]                          # global position, Y-up (no correction)
+        quat = _rotmat_to_quat_wxyz(global_rots[i]) # global orientation, Y-up
         human_data[name] = [pos, quat]
 
     return human_data
@@ -205,7 +256,9 @@ def process_video(video_path):
             # Retarget to robot joint angles
             robot_q = retarget_frame(hybrik_out)
             robot_q_list = robot_q.tolist() if hasattr(robot_q, 'tolist') else list(robot_q)
-            all_robot_qpos.append(robot_q_list)
+            # Strip root pos (3) + root quat (4) = first 7 values, keep only joint DOFs
+            joint_dofs = robot_q_list[7:] if len(robot_q_list) > 7 else robot_q_list
+            all_robot_qpos.append(joint_dofs)
 
             # Capture debug info for first frame
             if debug_info is None:
@@ -222,14 +275,12 @@ def process_video(video_path):
     finally:
         cap.release()
 
-    joint_names = retargeter.joint_names if hasattr(retargeter, 'joint_names') else []
-
     return {
         'status': 'completed',
         'video_path': video_path,
         'frame_count': len(all_robot_qpos),
         'actions': all_robot_qpos,
-        'joint_names': joint_names,
+        'joint_names': GMR_JOINT_NAMES,
         'joints_3d': all_joints_3d,
         'debug_first_frame': debug_info,
     }
