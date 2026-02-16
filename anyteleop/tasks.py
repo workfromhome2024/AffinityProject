@@ -65,7 +65,7 @@ def _init_models():
             f"No HybrIK model found. Provide either {HYBRIK_ONNX_PATH} or {HYBRIK_PTH_PATH}"
         )
 
-    # GMR retargeter — use our tuned IK config with wider leg separation
+    # GMR retargeter — use our upper-body-only IK config
     from general_motion_retargeting.motion_retarget import GeneralMotionRetargeting
     from general_motion_retargeting import params as gmr_params
     from pathlib import Path
@@ -234,43 +234,24 @@ def retarget_frame(hybrik_output):
     return retargeter.retarget(human_data)
 
 
-# Conservative leg joint limits (radians) to prevent extreme poses.
-# Format: {joint_index: (min, max)}
-# Indices 0-11 are leg joints in GMR_JOINT_NAMES order.
-LEG_CLAMP = {
-    0: (-0.4, 0.4),    # left_hip_pitch   (±23°)
-    1: (-0.15, 0.35),   # left_hip_roll    (-9° to +20°, slight outward bias)
-    2: (-0.2, 0.2),     # left_hip_yaw     (±11°)
-    3: (-0.1, 0.5),     # left_knee        (-6° to +29°, mostly forward bend)
-    4: (-0.3, 0.3),     # left_ankle_pitch (±17°)
-    5: (-0.2, 0.2),     # left_ankle_roll  (±11°)
-    6: (-0.4, 0.4),     # right_hip_pitch
-    7: (-0.35, 0.15),   # right_hip_roll   (-20° to +9°, mirrored outward bias)
-    8: (-0.2, 0.2),     # right_hip_yaw
-    9: (-0.1, 0.5),     # right_knee
-    10: (-0.3, 0.3),    # right_ankle_pitch
-    11: (-0.2, 0.2),    # right_ankle_roll
-}
+# Number of leg DOFs at the start of GMR_JOINT_NAMES (indices 0-11).
+NUM_LEG_DOFS = 12
 
 
 def _postprocess_actions(all_qpos):
-    """Clamp leg joints to conservative limits and apply temporal smoothing."""
+    """Zero leg joints and apply temporal smoothing to upper-body joints."""
     if not all_qpos:
         return all_qpos
 
     arr = np.array(all_qpos, dtype=np.float64)
 
-    # 1. Clamp leg joint angles
-    for idx, (lo, hi) in LEG_CLAMP.items():
-        if idx < arr.shape[1]:
-            arr[:, idx] = np.clip(arr[:, idx], lo, hi)
+    # 1. Zero out all leg DOFs (indices 0-11) — upper-body-only retargeting
+    arr[:, :NUM_LEG_DOFS] = 0.0
 
-    # 2. Temporal smoothing (Savitzky-Golay-like: simple moving average)
-    #    Use window=5 for smooth motion without too much lag
+    # 2. Temporal smoothing on upper-body joints only (Savitzky-Golay)
     if arr.shape[0] >= 5:
         from scipy.signal import savgol_filter
-        # Apply to all joints, window=5, polynomial order=2
-        for j in range(arr.shape[1]):
+        for j in range(NUM_LEG_DOFS, arr.shape[1]):
             arr[:, j] = savgol_filter(arr[:, j], window_length=5, polyorder=2)
 
     return arr.tolist()
@@ -327,7 +308,7 @@ def process_video(video_path):
     finally:
         cap.release()
 
-    # Post-process: clamp leg angles and apply temporal smoothing
+    # Post-process: zero leg DOFs and smooth upper-body joints
     all_robot_qpos = _postprocess_actions(all_robot_qpos)
 
     return {
