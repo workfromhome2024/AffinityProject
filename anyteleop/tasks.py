@@ -65,8 +65,13 @@ def _init_models():
             f"No HybrIK model found. Provide either {HYBRIK_ONNX_PATH} or {HYBRIK_PTH_PATH}"
         )
 
-    # GMR retargeter
+    # GMR retargeter — use our tuned IK config with wider leg separation
     from general_motion_retargeting.motion_retarget import GeneralMotionRetargeting
+    from general_motion_retargeting import params as gmr_params
+    from pathlib import Path
+    custom_config = Path('/app/ik_configs/smplx_to_g1_tuned.json')
+    if custom_config.exists():
+        gmr_params.IK_CONFIG_DICT['smplx']['unitree_g1_with_hands'] = custom_config
     retargeter = GeneralMotionRetargeting(
         src_human='smplx',
         tgt_robot='unitree_g1_with_hands',
@@ -179,15 +184,16 @@ def _rotmat_to_quat_wxyz(R):
     return np.array([q[3], q[0], q[1], q[2]])
 
 
-def hybrik_to_human_data(hybrik_output):
+def hybrik_to_human_data(hybrik_output, chain_rotations=True):
     """Convert HybrIK output to GMR's expected human_data format.
 
     GMR expects: {joint_name: [global_position_3d, global_quaternion_wxyz]}
     Positions and rotations stay in SMPL-X native frame (Y-up).
     GMR's IK config handles the Y-up to Z-up mapping internally.
 
-    HybrIK's pred_theta_mat contains LOCAL rotation matrices per joint,
-    so we chain them through the kinematic tree to get global orientations.
+    If chain_rotations=True, treat pred_theta_mat as LOCAL rotations and
+    chain them through the kinematic tree. If False, use them directly as
+    global orientations (HybrIK may already output globals).
     """
     # Squeeze batch dimension and reshape
     positions_raw = hybrik_output['joints_3d_global'].squeeze()
@@ -199,20 +205,24 @@ def hybrik_to_human_data(hybrik_output):
 
     num_joints = min(len(SMPLX_JOINT_NAMES), positions.shape[0], rotmats.shape[0])
 
-    # Chain local rotations into global orientations: global[i] = global[parent] @ local[i]
-    global_rots = [None] * num_joints
-    for i in range(num_joints):
-        parent = SMPLX_PARENTS[i]
-        if parent < 0 or global_rots[parent] is None:
-            global_rots[i] = rotmats[i]
-        else:
-            global_rots[i] = global_rots[parent] @ rotmats[i]
+    if chain_rotations:
+        # Chain local rotations into global: global[i] = global[parent] @ local[i]
+        final_rots = [None] * num_joints
+        for i in range(num_joints):
+            parent = SMPLX_PARENTS[i]
+            if parent < 0 or final_rots[parent] is None:
+                final_rots[i] = rotmats[i]
+            else:
+                final_rots[i] = final_rots[parent] @ rotmats[i]
+    else:
+        # Use rotation matrices directly (already global)
+        final_rots = [rotmats[i] for i in range(num_joints)]
 
     human_data = {}
     for i in range(num_joints):
         name = SMPLX_JOINT_NAMES[i]
-        pos = positions[i]                          # global position, Y-up (no correction)
-        quat = _rotmat_to_quat_wxyz(global_rots[i]) # global orientation, Y-up
+        pos = positions[i]
+        quat = _rotmat_to_quat_wxyz(final_rots[i])
         human_data[name] = [pos, quat]
 
     return human_data
@@ -220,7 +230,7 @@ def hybrik_to_human_data(hybrik_output):
 
 def retarget_frame(hybrik_output):
     """Retarget HybrIK output to G1 robot joint angles via GMR."""
-    human_data = hybrik_to_human_data(hybrik_output)
+    human_data = hybrik_to_human_data(hybrik_output, chain_rotations=True)
     return retargeter.retarget(human_data)
 
 
