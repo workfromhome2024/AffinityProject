@@ -237,9 +237,21 @@ def retarget_frame(hybrik_output):
 # Number of leg DOFs at the start of GMR_JOINT_NAMES (indices 0-11).
 NUM_LEG_DOFS = 12
 
+# Wrist joint indices and reasonable clamp limits (radians).
+# The IK solver sometimes pushes wrist joints to hardware limits when
+# it can't converge, producing abnormal angles. Clamp to ±60°.
+WRIST_CLAMP = {
+    19: (-1.05, 1.05),   # left_wrist_roll
+    20: (-1.05, 1.05),   # left_wrist_pitch
+    21: (-1.05, 1.05),   # left_wrist_yaw
+    33: (-1.05, 1.05),   # right_wrist_roll
+    34: (-1.05, 1.05),   # right_wrist_pitch
+    35: (-1.05, 1.05),   # right_wrist_yaw
+}
+
 
 def _postprocess_actions(all_qpos):
-    """Zero leg joints and apply temporal smoothing to upper-body joints."""
+    """Zero leg joints, clamp wrists, and apply temporal smoothing."""
     if not all_qpos:
         return all_qpos
 
@@ -248,7 +260,12 @@ def _postprocess_actions(all_qpos):
     # 1. Zero out all leg DOFs (indices 0-11) — upper-body-only retargeting
     arr[:, :NUM_LEG_DOFS] = 0.0
 
-    # 2. Temporal smoothing on upper-body joints only (Savitzky-Golay)
+    # 2. Clamp wrist joints to prevent abnormal angles from IK failures
+    for idx, (lo, hi) in WRIST_CLAMP.items():
+        if idx < arr.shape[1]:
+            arr[:, idx] = np.clip(arr[:, idx], lo, hi)
+
+    # 3. Temporal smoothing on upper-body joints only (Savitzky-Golay)
     if arr.shape[0] >= 5:
         from scipy.signal import savgol_filter
         for j in range(NUM_LEG_DOFS, arr.shape[1]):
