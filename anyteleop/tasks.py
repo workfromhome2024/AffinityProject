@@ -268,9 +268,6 @@ def process_video(video_path):
             robot_q_list = robot_q.tolist() if hasattr(robot_q, 'tolist') else list(robot_q)
             # Strip root pos (3) + root quat (4) = first 7 values, keep only joint DOFs
             joint_dofs = robot_q_list[7:] if len(robot_q_list) > 7 else robot_q_list
-            # Zero out leg joints (indices 0-11), keep only upper body (waist + arms + hands)
-            for i in range(min(12, len(joint_dofs))):
-                joint_dofs[i] = 0.0
             all_robot_qpos.append(joint_dofs)
 
             # Capture debug info for first frame
