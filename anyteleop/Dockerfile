@@ -25,7 +25,7 @@ RUN pip install --no-cache-dir \
     opencv-python numpy scipy cython pycocotools celery redis ultralytics
 
 # GVHMR (hmr4d package) — video-level human mesh recovery
-RUN git clone https://github.com/lithiumice/GVHMR.git /opt/gvhmr \
+RUN git clone https://github.com/zju3dv/GVHMR.git /opt/gvhmr \
     && pip install --no-cache-dir -e /opt/gvhmr
 
 # GMR: General Motion Retargeting (sparse checkout — only unitree_g1 assets)
