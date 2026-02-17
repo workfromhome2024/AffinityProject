@@ -1,33 +1,36 @@
-FROM python:3.10-slim
+FROM nvidia/cuda:12.1.1-devel-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
+# System dependencies (ffmpeg needed by GVHMR video I/O)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgl1 \
-    libglib2.0-0 \
-    git \
-    build-essential \
+    python3.10 python3.10-dev python3-pip \
+    libgl1 libglib2.0-0 git build-essential ffmpeg \
+    && ln -sf /usr/bin/python3.10 /usr/bin/python \
     && rm -rf /var/lib/apt/lists/*
 
+# PyTorch 2.3.0 with CUDA 12.1
 RUN pip install --no-cache-dir \
-    torch --index-url https://download.pytorch.org/whl/cpu \
-    && pip install --no-cache-dir \
-    opencv-python \
-    numpy \
-    scipy \
-    cython \
-    pycocotools \
-    onnxruntime \
-    celery \
-    redis
+    torch==2.3.0 torchvision==0.18.0 --index-url https://download.pytorch.org/whl/cu121
 
-# Lightweight pytorch3d shim (only rotation conversions needed by HybrIK)
-COPY pytorch3d_shim/ /usr/local/lib/python3.10/site-packages/pytorch3d/
+# pytorch3d (build from source; CUDA devel image provides nvcc)
+RUN pip install --no-cache-dir fvcore iopath \
+    && FORCE_CUDA=1 pip install --no-cache-dir \
+    "pytorch3d @ git+https://github.com/facebookresearch/pytorch3d.git@v0.7.8"
 
-# HybrIK: clone into image, relax opencv pin, editable install (keeps source in place)
-RUN git clone https://github.com/jeffffffli/HybrIK.git /opt/hybrik \
-    && sed -i "s/'opencv-python==4.1.2.30'/'opencv-python'/g" /opt/hybrik/setup.py \
-    && pip install --no-cache-dir -e /opt/hybrik
+# SMPL body model package
+RUN pip install --no-cache-dir "smplx[torch]"
+
+# Python dependencies
+RUN pip install --no-cache-dir \
+    opencv-python numpy scipy cython pycocotools celery redis ultralytics
+
+# GVHMR (hmr4d package) — video-level human mesh recovery
+RUN git clone https://github.com/lithiumice/GVHMR.git /opt/gvhmr \
+    && pip install --no-cache-dir -e /opt/gvhmr
 
 # GMR: General Motion Retargeting (sparse checkout — only unitree_g1 assets)
 RUN git clone --no-checkout --filter=blob:none https://github.com/YanjieZe/GMR.git /opt/gmr \
