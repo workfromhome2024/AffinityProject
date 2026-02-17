@@ -112,6 +112,48 @@ def run_gvhmr_inference(video_path):
     }
 
 
+def _axis_angle_to_matrix(axis_angle):
+    """Convert axis-angle representation to rotation matrices (Rodrigues' formula).
+
+    Replaces pytorch3d.transforms.axis_angle_to_matrix to avoid the heavy
+    pytorch3d build dependency.
+
+    Args:
+        axis_angle: (..., 3) tensor of axis-angle vectors
+
+    Returns:
+        (..., 3, 3) tensor of rotation matrices
+    """
+    import torch
+
+    batch_shape = axis_angle.shape[:-1]
+    angle = axis_angle.norm(dim=-1, keepdim=True).unsqueeze(-1)  # (..., 1, 1)
+    # Avoid division by zero for near-zero rotations
+    safe = angle.squeeze(-1).squeeze(-1) > 1e-6
+    axis = axis_angle / angle.squeeze(-1).clamp(min=1e-8)  # (..., 3)
+
+    # Skew-symmetric matrix K from axis vector
+    kx, ky, kz = axis.unbind(-1)
+    zeros = torch.zeros_like(kx)
+    K = torch.stack([
+        zeros, -kz, ky,
+        kz, zeros, -kx,
+        -ky, kx, zeros,
+    ], dim=-1).reshape(*batch_shape, 3, 3)
+
+    # Rodrigues: R = I + sin(a)*K + (1 - cos(a))*K^2
+    eye = torch.eye(3, device=axis_angle.device, dtype=axis_angle.dtype).expand(*batch_shape, 3, 3)
+    R = eye + angle.sin() * K + (1.0 - angle.cos()) * (K @ K)
+
+    # For near-zero angles, return identity
+    eye_flat = eye.reshape(-1, 3, 3)
+    R_flat = R.reshape(-1, 3, 3)
+    safe_flat = safe.reshape(-1)
+    R_flat[~safe_flat] = eye_flat[~safe_flat]
+
+    return R_flat.reshape(*batch_shape, 3, 3)
+
+
 def smpl_forward_kinematics(smpl_params):
     """Run SMPL body model to get joint positions and global rotation matrices.
 
@@ -124,7 +166,6 @@ def smpl_forward_kinematics(smpl_params):
         global_rotmats: (F, 22, 3, 3) numpy -- global rotation matrices per joint
     """
     import torch
-    from pytorch3d.transforms import axis_angle_to_matrix
 
     num_frames = smpl_params['body_pose'].shape[0]
 
@@ -150,7 +191,7 @@ def smpl_forward_kinematics(smpl_params):
     # Build global rotation matrices by chaining local rotations.
     # Joint 0 = global_orient, joints 1-21 = first 21 of body_pose's 23 joints.
     full_pose_aa = torch.cat([global_orient, body_pose[:, :21, :]], dim=1)  # (F, 22, 3)
-    local_rotmats = axis_angle_to_matrix(full_pose_aa)  # (F, 22, 3, 3)
+    local_rotmats = _axis_angle_to_matrix(full_pose_aa)  # (F, 22, 3, 3)
 
     global_rotmats = torch.zeros_like(local_rotmats)
     for i in range(22):
