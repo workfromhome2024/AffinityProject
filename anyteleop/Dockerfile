@@ -19,7 +19,7 @@ RUN pip install --no-cache-dir \
 # pytorch3d (build from source; CUDA devel image provides nvcc)
 RUN pip install --no-cache-dir fvcore iopath \
     && FORCE_CUDA=1 pip install --no-cache-dir \
-    "pytorch3d @ git+https://github.com/facebookresearch/pytorch3d.git@v0.7.8"
+    "pytorch3d @ git+https://github.com/facebookresearch/pytorch3d.git@v0.7.7"
 
 # SMPL body model package
 RUN pip install --no-cache-dir "smplx[torch]"
